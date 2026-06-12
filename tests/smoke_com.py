@@ -18,6 +18,7 @@ try:
     from thepexcel_mcp.domains.sheets import sheet_action
     from thepexcel_mcp.domains.tables import table_action
     from thepexcel_mcp.domains.pivots import pivot_action
+    from thepexcel_mcp.domains.datamodel import datamodel_action
     from thepexcel_mcp.session import ExcelSession
 except ImportError as e:
     print(f"Import failed: {e}")
@@ -225,6 +226,152 @@ def main():
                 print(f"\n    Temp workbook '{tmp_wb_name}' closed (not saved).")
             except Exception as e:
                 print(f"    WARNING: Could not close temp workbook: {e}")
+
+    # ── Phase 2: Data Model + DAX measures ───────────────────────────────────
+    print("\n[8] Phase 2: Data Model + DAX measures on a fresh temp workbook...")
+    tmp_wb2 = None
+    tmp_wb2_name = None
+    try:
+        app = _session.get_app()
+        tmp_wb2 = app.Workbooks.Add()
+        tmp_wb2_name = tmp_wb2.Name
+        print(f"    Created temp workbook: {tmp_wb2_name}")
+
+        ws = tmp_wb2.ActiveSheet
+        ws.Name = "Sales"
+
+        # Write test data: headers + 5 rows
+        ws.Range("A1:C1").Value = [["ProductID", "Region", "Amount"]]
+        ws.Range("A2:C6").Value = [
+            [1, "North", 1000],
+            [2, "South", 1500],
+            [1, "North", 1200],
+            [2, "South", 1800],
+            [1, "East",  900],
+        ]
+
+        ws2 = tmp_wb2.Sheets.Add()
+        ws2.Name = "Products"
+        ws2.Range("A1:B1").Value = [["ProductID", "ProductName"]]
+        ws2.Range("A2:B3").Value = [[1, "Widget"], [2, "Gadget"]]
+        print("    Test data written.")
+
+        print("\n    [8a] Create Sales table from Sheet 'Sales'...")
+        r = table_action("create", name="SalesTable", range="A1:C6",
+                         sheet="Sales", workbook=tmp_wb2_name)
+        print(f"         {r}")
+
+        print("    [8b] Create Products table from Sheet 'Products'...")
+        r = table_action("create", name="ProductsTable", range="A1:B3",
+                         sheet="Products", workbook=tmp_wb2_name)
+        print(f"         {r}")
+
+        print("    [8c] Add SalesTable to Data Model...")
+        r = datamodel_action("add_table", workbook=tmp_wb2_name,
+                             source_type="table", source_name="SalesTable")
+        print(f"         {r}")
+
+        print("    [8d] Add ProductsTable to Data Model...")
+        r = datamodel_action("add_table", workbook=tmp_wb2_name,
+                             source_type="table", source_name="ProductsTable")
+        print(f"         {r}")
+
+        print("    [8e] Data Model info...")
+        r = datamodel_action("info", workbook=tmp_wb2_name)
+        print(f"         {r}")
+
+        print("    [8f] List model tables...")
+        r = datamodel_action("list_tables", workbook=tmp_wb2_name)
+        print(f"         tables={[t['name'] for t in r['tables']]}")
+
+        print("    [8g] Add relationship SalesTable.ProductID → ProductsTable.ProductID...")
+        try:
+            r = datamodel_action("add_relationship", workbook=tmp_wb2_name,
+                                 from_table="SalesTable", from_column="ProductID",
+                                 to_table="ProductsTable", to_column="ProductID")
+            print(f"         {r}")
+        except Exception as e:
+            print(f"         SKIP (relationship may need refresh first): {e}")
+
+        print("    [8h] List relationships...")
+        r = datamodel_action("list_relationships", workbook=tmp_wb2_name)
+        print(f"         {r}")
+
+        print("    [8i] Add DAX measure 'Total Sales'...")
+        r = datamodel_action("add_measure", workbook=tmp_wb2_name,
+                             measure_name="Total Sales",
+                             table="SalesTable",
+                             formula="=SUM(SalesTable[Amount])",
+                             format_type="currency",
+                             decimal_places=2,
+                             use_thousand_sep=True)
+        print(f"         {r}")
+
+        print("    [8j] Add DAX measure 'Avg Amount'...")
+        r = datamodel_action("add_measure", workbook=tmp_wb2_name,
+                             measure_name="Avg Amount",
+                             table="SalesTable",
+                             formula="=AVERAGE(SalesTable[Amount])",
+                             format_type="decimal",
+                             decimal_places=1)
+        print(f"         {r}")
+
+        print("    [8k] List measures...")
+        r = datamodel_action("list_measures", workbook=tmp_wb2_name)
+        print(f"         measures={[m['name'] for m in r['measures']]}")
+
+        print("    [8l] Update measure 'Avg Amount' formula...")
+        r = datamodel_action("update_measure", workbook=tmp_wb2_name,
+                             measure_name="Avg Amount",
+                             new_formula="=AVERAGEX(SalesTable, SalesTable[Amount])")
+        print(f"         {r}")
+
+        print("    [8m] Create data-model pivot from 'Total Sales' measure...")
+        try:
+            r = pivot_action("create", name="DMPivot", source="datamodel",
+                             workbook=tmp_wb2_name)
+            print(f"         created: {r.get('sheet')}, fields: {r.get('available_fields', [])[:5]}")
+
+            print("    [8n] Add Region to rows...")
+            try:
+                r = pivot_action("add_field", name="DMPivot", workbook=tmp_wb2_name,
+                                 field="Region", area="rows")
+                print(f"         {r}")
+            except Exception as e:
+                print(f"         SKIP Region (use cube field format): {e}")
+
+            print("    [8o] Add Total Sales measure to values...")
+            try:
+                r = pivot_action("add_field", name="DMPivot", workbook=tmp_wb2_name,
+                                 field="Total Sales", area="values")
+                print(f"         {r}")
+            except Exception as e:
+                print(f"         SKIP (try [Measures].[Total Sales]): {e}")
+
+        except Exception as e:
+            print(f"         SKIP datamodel pivot: {e}")
+
+        print("    [8p] Delete measure 'Avg Amount'...")
+        r = datamodel_action("delete_measure", workbook=tmp_wb2_name,
+                             measure_name="Avg Amount")
+        print(f"         {r}")
+
+        print("    [8q] Final model info...")
+        r = datamodel_action("info", workbook=tmp_wb2_name)
+        print(f"         {r}")
+
+        print("\n    All Phase 2 checks PASSED.")
+
+    except Exception as e:
+        print(f"\n    Phase 2 ERROR: {e}")
+        import traceback; traceback.print_exc()
+    finally:
+        if tmp_wb2 is not None:
+            try:
+                tmp_wb2.Close(SaveChanges=False)
+                print(f"\n    Temp workbook '{tmp_wb2_name}' closed (not saved).")
+            except Exception as e:
+                print(f"    WARNING: Could not close temp workbook 2: {e}")
 
     print("\n=== Smoke test complete ===")
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
 
+from .domains.datamodel import datamodel_action
 from .domains.pivots import pivot_action
 from .domains.powerquery import powerquery_action
 from .domains.ranges import range_action
@@ -189,7 +190,8 @@ def excel_powerquery(
     ----------
     action : str
         One of: ``list``, ``get``, ``create``, ``update``, ``delete``,
-        ``refresh``, ``refresh_all``, ``load_to_table``, ``analyze``, ``analyze_raw``.
+        ``refresh``, ``refresh_all``, ``load_to_table``, ``load_to_datamodel``,
+        ``analyze``, ``analyze_raw``.
     name : str, optional
         Query name. Required for most actions.
     workbook : str, optional
@@ -208,7 +210,8 @@ def excel_powerquery(
     Actions
     -------
     list
-        Lists all queries with name, description, line count.
+        Lists all queries with name, description, line count, and ``model_connection``
+        flag when the query is loaded to the Data Model.
         Example: ``excel_powerquery(action="list")``
     get
         Returns full M code and metadata for a query.
@@ -234,6 +237,11 @@ def excel_powerquery(
         Loads a connection-only query to a new worksheet Table.
         Creates or replaces the target sheet. Uses Connections.Add2 + Mashup-OLEDB pattern.
         Example: ``excel_powerquery(action="load_to_table", name="SalesData", sheet_name="Output")``
+    load_to_datamodel
+        Loads a query directly to the Data Model (no worksheet table output).
+        Uses Connections.Add2 with CreateModelConnection=True.
+        After loading, the query appears in excel_datamodel(action="list_tables").
+        Example: ``excel_powerquery(action="load_to_datamodel", name="SalesData")``
     analyze
         Analyzes M code from an existing query for anti-patterns
         (query folding, unnecessary buffers, hardcoded paths, etc.).
@@ -524,6 +532,152 @@ def excel_pivot(
         grand_totals=grand_totals,
         offset=offset,
         limit=limit,
+    )
+
+
+@mcp.tool()
+def excel_datamodel(
+    action: str,
+    workbook: str | None = None,
+    # add_table
+    source_type: str | None = None,
+    source_name: str | None = None,
+    # relationships
+    from_table: str | None = None,
+    from_column: str | None = None,
+    to_table: str | None = None,
+    to_column: str | None = None,
+    relationship_index: int | None = None,
+    # measures
+    measure_name: str | None = None,
+    table: str | None = None,
+    formula: str | None = None,
+    format_type: str | None = None,
+    decimal_places: int | None = None,
+    use_thousand_sep: bool | None = None,
+    description: str | None = None,
+    new_formula: str | None = None,
+    new_format_type: str | None = None,
+    new_description: str | None = None,
+) -> dict:
+    """Manage the Excel Data Model (Power Pivot) — tables, relationships, and DAX measures.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``info``, ``list_tables``, ``add_table``, ``list_relationships``,
+        ``add_relationship``, ``delete_relationship``, ``list_measures``,
+        ``add_measure``, ``update_measure``, ``delete_measure``, ``refresh``.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    source_type : str, optional
+        For ``add_table``: ``"table"`` (ListObject) or ``"query"`` (Power Query).
+    source_name : str, optional
+        Name of the table or query to add to the model.
+    from_table : str, optional
+        FK (many-side) table name for relationship operations.
+    from_column : str, optional
+        FK column name in ``from_table``.
+    to_table : str, optional
+        PK (one-side) table name for relationship operations.
+    to_column : str, optional
+        PK column name in ``to_table``.
+    relationship_index : int, optional
+        1-based index for ``delete_relationship``.
+    measure_name : str, optional
+        Measure name. Required for measure operations.
+    table : str, optional
+        Model table to associate the measure with (``add_measure``).
+    formula : str, optional
+        DAX formula string (e.g. ``"=SUM(Sales[Amount])"``) for ``add_measure``.
+    format_type : str, optional
+        Measure format: ``general``, ``decimal``, ``number``, ``currency``,
+        ``percent``, ``whole``, ``integer``, ``boolean``, ``date``, ``scientific``.
+        Default: ``general``.
+    decimal_places : int, optional
+        Decimal places for decimal/whole/currency formats.
+    use_thousand_sep : bool, optional
+        Thousand separator for decimal/whole/currency formats.
+    description : str, optional
+        Measure description for ``add_measure``.
+    new_formula : str, optional
+        New DAX formula for ``update_measure``.
+    new_format_type : str, optional
+        New format type for ``update_measure``.
+    new_description : str, optional
+        New description for ``update_measure``.
+
+    Actions
+    -------
+    info
+        Model summary: table count, relationship count, measure count.
+        Example: ``excel_datamodel(action="info")``
+    list_tables
+        All model tables with names, source, record count, columns.
+        Example: ``excel_datamodel(action="list_tables")``
+    add_table
+        Add an existing workbook Table or Power Query to the Data Model.
+        Uses Connections.Add2 with CreateModelConnection=True.
+        Requires ``source_type`` and ``source_name``.
+        Example: ``excel_datamodel(action="add_table",
+        source_type="table", source_name="SalesTable")``
+        Example: ``excel_datamodel(action="add_table",
+        source_type="query", source_name="SalesQuery")``
+    list_relationships
+        All relationships: FK table.column → PK table.column, active flag.
+        Example: ``excel_datamodel(action="list_relationships")``
+    add_relationship
+        Create a one-to-many relationship. Requires ``from_table``,
+        ``from_column`` (FK/many side), ``to_table``, ``to_column`` (PK/one side).
+        Example: ``excel_datamodel(action="add_relationship",
+        from_table="Sales", from_column="ProductID",
+        to_table="Products", to_column="ProductID")``
+    delete_relationship
+        Delete a relationship by 1-based index from ``list_relationships``.
+        Example: ``excel_datamodel(action="delete_relationship",
+        relationship_index=1)``
+    list_measures
+        All DAX measures: name, table, formula, format, description.
+        Example: ``excel_datamodel(action="list_measures")``
+    add_measure
+        Add a DAX measure. Requires ``measure_name``, ``table``, ``formula``.
+        Example: ``excel_datamodel(action="add_measure",
+        measure_name="Total Sales", table="Sales",
+        formula="=SUM(Sales[Amount])", format_type="currency",
+        decimal_places=2, use_thousand_sep=True)``
+    update_measure
+        Update formula, format, or description. Requires ``measure_name``.
+        Pass only the fields to change.
+        Example: ``excel_datamodel(action="update_measure",
+        measure_name="Total Sales", new_formula="=SUMX(Sales, Sales[Amount])")``
+    delete_measure
+        Delete a measure by name. Requires ``measure_name``.
+        Example: ``excel_datamodel(action="delete_measure",
+        measure_name="OldMeasure")``
+    refresh
+        Refresh all Data Model data sources (Model.Refresh()).
+        Example: ``excel_datamodel(action="refresh")``
+    """
+    return datamodel_action(
+        action,
+        workbook=workbook,
+        source_type=source_type,
+        source_name=source_name,
+        from_table=from_table,
+        from_column=from_column,
+        to_table=to_table,
+        to_column=to_column,
+        relationship_index=relationship_index,
+        measure_name=measure_name,
+        table=table,
+        formula=formula,
+        format_type=format_type,
+        decimal_places=decimal_places,
+        use_thousand_sep=use_thousand_sep,
+        description=description,
+        new_formula=new_formula,
+        new_format_type=new_format_type,
+        new_description=new_description,
     )
 
 

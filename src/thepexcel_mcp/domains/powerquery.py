@@ -28,13 +28,16 @@ def powerquery_action(
     sheet_name: str | None = None,
     # analyze_raw
     raw_formula: str | None = None,
+    # load_to_datamodel (Phase 2)
+    load_to_datamodel: bool = False,
 ) -> dict:
     """Dispatch a Power Query action.
 
     Actions
     -------
     list
-        List all queries in the workbook (name, description, line count).
+        List all queries in the workbook (name, description, line count,
+        and ``model_connection`` flag when detectable).
     get
         Return M code + metadata for a single query. Requires ``name``.
     create
@@ -52,6 +55,10 @@ def powerquery_action(
         Load a connection-only query to a new worksheet Table. Requires ``name``.
         Creates a sheet named ``sheet_name`` (defaults to query name, max 31 chars).
         Uses the proven Connections.Add2 + Mashup-OLEDB pattern.
+    load_to_datamodel
+        Load a query directly to the Data Model (no worksheet table). Requires ``name``.
+        Uses Connections.Add2 with CreateModelConnection=True.
+        After loading, use excel_datamodel(action="list_tables") to confirm.
     analyze
         Analyze M code from an existing query for anti-patterns. Requires ``name``.
     analyze_raw
@@ -80,6 +87,9 @@ def powerquery_action(
     if action == "load_to_table":
         _require(name, "name", action)
         return _load_to_table(name, sheet_name, workbook)
+    if action == "load_to_datamodel":
+        _require(name, "name", action)
+        return _load_to_datamodel(name, workbook)
     if action == "analyze":
         _require(name, "name", action)
         return _analyze(name, workbook)
@@ -88,7 +98,7 @@ def powerquery_action(
         return _analyze_raw(raw_formula, name or "unnamed")
     raise ToolError(
         f"Unknown action '{action}'. Valid: list, get, create, update, delete, "
-        "refresh, refresh_all, load_to_table, analyze, analyze_raw."
+        "refresh, refresh_all, load_to_table, load_to_datamodel, analyze, analyze_raw."
     )
 
 
@@ -122,14 +132,33 @@ def _format_result(q) -> dict:
 
 def _list(workbook: str | None) -> dict:
     wb = _session.get_workbook(workbook)
+    # Build set of query names that have a model connection
+    model_conn_names: set[str] = set()
+    try:
+        for i in range(1, wb.Connections.Count + 1):
+            c = wb.Connections.Item(i)
+            try:
+                # Type 7 = xlConnectionTypeOLEDB with CreateModelConnection
+                # Check for ModelConnection type (6) or OLEDB with model flag
+                if c.Type == 6:  # xlConnectionTypeModel
+                    cname = c.Name  # e.g. "Query - SalesData" or bare query name
+                    if cname.startswith("Query - "):
+                        model_conn_names.add(cname[len("Query - "):])
+            except Exception:
+                pass
+    except Exception:
+        pass
     queries = []
     for i in range(1, wb.Queries.Count + 1):
         q = wb.Queries.Item(i)
-        queries.append({
+        entry = {
             "name": q.Name,
             "description": q.Description or "",
             "line_count": q.Formula.count("\n") + 1,
-        })
+        }
+        if q.Name in model_conn_names:
+            entry["model_connection"] = True
+        queries.append(entry)
     return {"queries": queries, "count": len(queries)}
 
 
@@ -309,6 +338,71 @@ def _load_to_table(
         "sheet": ws.Name,
         "table": lo.Name,
         "rows": rows,
+    }
+
+
+def _load_to_datamodel(name: str, workbook: str | None) -> dict:
+    """Load a query result directly to the Data Model (no worksheet table).
+
+    Uses Connections.Add2 with CreateModelConnection=True — same Mashup-OLEDB
+    pattern as _load_to_table but skips the ListObjects.Add step.
+    After Add2 + Refresh, wb.Model.Initialize() flushes metadata.
+    """
+    wb = _session.get_workbook(workbook)
+
+    # Verify query exists
+    _query_obj(wb, name)
+
+    conn_name = f"Query - {name}"
+    conn_str = (
+        "OLEDB;"
+        "Provider=Microsoft.Mashup.OleDb.1;"
+        "Data Source=$Workbook$;"
+        f"Location={name}"
+    )
+    command_text = f"SELECT * FROM [{name}]"
+
+    # Remove stale model connection for this query
+    to_delete = []
+    for i in range(1, wb.Connections.Count + 1):
+        c = wb.Connections.Item(i)
+        try:
+            if name in (c.OLEDBConnection.Connection or ""):
+                to_delete.append(c.Name)
+        except Exception:
+            pass
+    for cname in to_delete:
+        try:
+            wb.Connections(cname).Delete()
+        except Exception:
+            pass
+
+    try:
+        conn = wb.Connections.Add2(
+            conn_name,
+            "",
+            conn_str,
+            command_text,
+            2,      # lCmdtype = xlCmdSql
+            True,   # CreateModelConnection = True
+            False,  # ImportRelationships
+        )
+        conn.Refresh()
+    except Exception as e:
+        raise _session.wrap(e, f"load_to_datamodel: Connections.Add2 failed for '{name}'")
+
+    # Flush model metadata
+    model_table_count = None
+    try:
+        wb.Model.Initialize()
+        model_table_count = wb.Model.ModelTables.Count
+    except Exception:
+        pass
+
+    return {
+        "loaded_to_datamodel": name,
+        "connection": conn_name,
+        "model_table_count": model_table_count,
     }
 
 

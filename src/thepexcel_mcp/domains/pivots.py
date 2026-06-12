@@ -406,6 +406,16 @@ def _resolve_area(area: str) -> int:
     return _AREA_STR_TO_CONST[key]
 
 
+def _is_datamodel_pivot(pt) -> bool:
+    """True if this pivot was created from the workbook Data Model."""
+    try:
+        # Data model pivots have SourceData == None / not applicable
+        # and their PivotCaches.SourceType == xlExternal (2)
+        return int(pt.PivotCache().SourceType) == _XL_EXTERNAL
+    except Exception:
+        return False
+
+
 def _add_field(
     name: str,
     workbook: str | None,
@@ -418,9 +428,47 @@ def _add_field(
     pt = _find_pivot(wb, name)
     orientation = _resolve_area(area)
 
+    # Data Model pivots expose measures as CubeFields with captions like
+    # "[Measures].[MeasureName]" or "[TableName].[ColumnName]".
+    # We try PivotFields first (works for regular pivots); on failure
+    # try a CubeField match by caption or by "[Measures].[field_name]" pattern.
+    pf = None
     try:
         pf = pt.PivotFields(field_name)
     except Exception:
+        pass
+
+    if pf is None and _is_datamodel_pivot(pt):
+        # Try CubeFields — enumerate and match by Name or caption
+        cube_candidates = [
+            f"[Measures].[{field_name}]",
+            field_name,
+        ]
+        try:
+            cfs = pt.CubeFields()
+            for ci in range(1, cfs.Count + 1):
+                cf = cfs.Item(ci)
+                try:
+                    cf_name = cf.Name  # e.g. "[Measures].[Total Sales]"
+                    if cf_name in cube_candidates or cf_name == field_name:
+                        cf.Orientation = orientation
+                        if number_format:
+                            try:
+                                cf.NumberFormat = number_format
+                            except Exception:
+                                pass
+                        return {
+                            "pivot": name,
+                            "field": cf_name,
+                            "area": _AREA_NAME.get(orientation, area),
+                            "note": "data_model_cubefield",
+                        }
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    if pf is None:
         available = _get_available_fields(pt)
         raise ToolError(
             f"Field '{field_name}' not found in PivotTable '{name}'. "
