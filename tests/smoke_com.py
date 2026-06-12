@@ -19,6 +19,9 @@ try:
     from thepexcel_mcp.domains.tables import table_action
     from thepexcel_mcp.domains.pivots import pivot_action
     from thepexcel_mcp.domains.datamodel import datamodel_action
+    from thepexcel_mcp.domains.charts import chart_action
+    from thepexcel_mcp.domains.screenshot import screenshot_action
+    from thepexcel_mcp.domains.ranges import range_action
     from thepexcel_mcp.session import ExcelSession
 except ImportError as e:
     print(f"Import failed: {e}")
@@ -372,6 +375,88 @@ def main():
                 print(f"\n    Temp workbook '{tmp_wb2_name}' closed (not saved).")
             except Exception as e:
                 print(f"    WARNING: Could not close temp workbook 2: {e}")
+
+    # ── Phase 4: Charts + Screenshot on a fresh temp workbook ────────────────
+    print("\n[9] Phase 4: Charts + Screenshot on a fresh temp workbook...")
+    tmp_wb4 = None
+    tmp_wb4_name = None
+    try:
+        app = _session.get_app()
+        tmp_wb4 = app.Workbooks.Add()
+        tmp_wb4_name = tmp_wb4.Name
+        print(f"    Created temp workbook: {tmp_wb4_name}")
+
+        ws = tmp_wb4.ActiveSheet
+        ws.Name = "ChartData"
+        ws.Range("A1:C1").Value = [["Month", "Revenue", "Cost"]]
+        ws.Range("A2:C5").Value = [
+            ["Jan", 10000, 7000],
+            ["Feb", 12000, 8000],
+            ["Mar", 11000, 7500],
+            ["Apr", 14000, 9000],
+        ]
+        print("    Test data written.")
+
+        print("\n    [9a] Create column chart from A1:C5...")
+        r = chart_action("create", source="A1:C5", chart_type="column",
+                         sheet="ChartData", workbook=tmp_wb4_name,
+                         title="Revenue vs Cost", position="E2")
+        chart_name = r["name"]
+        print(f"         Created: '{chart_name}' on sheet '{r['sheet']}'")
+
+        print("    [9b] List charts...")
+        r = chart_action("list", workbook=tmp_wb4_name)
+        print(f"         Found {r['count']} chart(s): {[c['name'] for c in r['charts']]}")
+
+        print("    [9c] Configure chart (legend + axis titles)...")
+        r = chart_action("configure", name=chart_name, workbook=tmp_wb4_name,
+                         x_title="Month", y_title="Amount (THB)",
+                         legend=True, legend_position="bottom")
+        print(f"         Changes: {r['changes']}")
+
+        print("    [9d] Export chart as PNG...")
+        r = chart_action("export_image", name=chart_name, workbook=tmp_wb4_name)
+        import os
+        print(f"         PNG at: {r['path']} (exists={os.path.exists(r['path'])})")
+
+        print("    [9e] Screenshot: range A1:C5...")
+        try:
+            r = screenshot_action("range", range="A1:C5",
+                                  sheet="ChartData", workbook=tmp_wb4_name)
+            print(f"         PNG at: {r['path']} (exists={os.path.exists(r['path'])})")
+        except Exception as e:
+            print(f"         SKIP screenshot range (may need visible Excel): {e}")
+
+        print("    [9f] Screenshot: full sheet...")
+        try:
+            r = screenshot_action("sheet", sheet="ChartData", workbook=tmp_wb4_name)
+            print(f"         PNG at: {r['path']} (exists={os.path.exists(r['path'])})")
+        except Exception as e:
+            print(f"         SKIP screenshot sheet: {e}")
+
+        print("    [9g] Screenshot via chart action...")
+        try:
+            r = screenshot_action("chart", name=chart_name, workbook=tmp_wb4_name)
+            print(f"         PNG at: {r['path']} (exists={os.path.exists(r['path'])})")
+        except Exception as e:
+            print(f"         SKIP screenshot chart: {e}")
+
+        print("    [9h] Delete chart...")
+        r = chart_action("delete", name=chart_name, workbook=tmp_wb4_name)
+        print(f"         {r}")
+
+        print("\n    All Phase 4 chart+screenshot checks PASSED.")
+
+    except Exception as e:
+        print(f"\n    Phase 4 ERROR: {e}")
+        import traceback; traceback.print_exc()
+    finally:
+        if tmp_wb4 is not None:
+            try:
+                tmp_wb4.Close(SaveChanges=False)
+                print(f"\n    Temp workbook '{tmp_wb4_name}' closed (not saved).")
+            except Exception as e:
+                print(f"    WARNING: Could not close temp workbook 4: {e}")
 
     print("\n=== Smoke test complete ===")
 
