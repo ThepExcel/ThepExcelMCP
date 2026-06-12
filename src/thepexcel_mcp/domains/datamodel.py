@@ -416,7 +416,17 @@ def _add_table(
             )
 
     # Build Mashup-OLEDB connection string (same as load_to_table but
-    # CreateModelConnection=True, no worksheet target)
+    # CreateModelConnection=True, no worksheet target).
+    #
+    # For source_type='table' (ListObject): the Mashup provider requires
+    # a Power Query query with matching name. We auto-create one using
+    # Excel.CurrentWorkbook() M code which reads the ListObject by name.
+    # IMPORTANT: Excel.CurrentWorkbook() requires a saved workbook — calling
+    # conn.Refresh() on an unsaved workbook will fail with "query not found".
+    # Ensure the workbook is saved before calling this action with source_type='table'.
+    #
+    # For source_type='query': the named Power Query must already exist in
+    # wb.Queries. The Mashup provider maps Location=<query_name> directly.
     conn_name = f"Query - {source_name}"
     conn_str = (
         "OLEDB;"
@@ -427,6 +437,28 @@ def _add_table(
     command_text = f"SELECT * FROM [{source_name}]"
 
     try:
+        # For table source: auto-create a PQ query that wraps the ListObject.
+        # This is required because the Mashup provider uses the query registry,
+        # not the worksheet table name directly.
+        if stype == "table":
+            pq_query_name = source_name
+            m_code = (
+                f"let Source = Excel.CurrentWorkbook(){{[Name=\"{source_name}\"]}}[Content] in Source"
+            )
+            # Add or replace the wrapping query
+            try:
+                wb.Queries(pq_query_name).Delete()
+            except Exception:
+                pass
+            try:
+                wb.Queries.Add(pq_query_name, m_code)
+            except Exception as e:
+                raise _session.wrap(
+                    e,
+                    f"Could not create PQ wrapper query '{pq_query_name}' for table '{source_name}'. "
+                    "Ensure the workbook is saved (Excel.CurrentWorkbook() requires a file path)."
+                )
+
         # Remove stale model connection for the same source if present
         to_delete = []
         for i in range(1, wb.Connections.Count + 1):
@@ -452,8 +484,30 @@ def _add_table(
             True,             # CreateModelConnection ← key difference
             False,            # ImportRelationships
         )
+        # Trigger the model refresh.
+        # WorkbookConnection.Refresh() with Mashup/PQ provider deadlocks in
+        # pure COM automation because the PQ engine re-enters Excel's COM while
+        # the calling thread is blocked. Use BackgroundQuery=False on the
+        # OLEDBConnection to request synchronous mode, then call Refresh.
+        # In real usage (Claude Desktop / Claude Code with Excel visible and
+        # its message pump running), this works correctly. In headless test
+        # automation the caller may need to call wb.RefreshAll() separately.
+        try:
+            conn.OLEDBConnection.BackgroundQuery = False
+        except Exception:
+            pass
         conn.Refresh()
+    except ToolError:
+        raise
     except Exception as e:
+        if stype == "table":
+            raise ToolError(
+                f"Add table '{source_name}' to Data Model failed. "
+                "Ensure the workbook is saved and Excel is visible "
+                "(the PQ engine requires Excel's message pump to complete "
+                "the Data Model refresh). "
+                f"Raw error: {e}"
+            )
         raise _session.wrap(e, f"Add '{source_name}' to Data Model failed")
 
     # Flush model metadata

@@ -178,17 +178,95 @@ def _read(
         "has_more": has_more,
         "next_offset": offset + limit if has_more else None,
     }
-    # Spill metadata for the top-left cell of the range
+    # Spill metadata for the top-left cell of the range.
+    # SpillingRange is a newer COM property not exposed via pywin32 late-binding
+    # dispatch on all Excel builds. We use a HasSpill row/column scan fallback
+    # that is robust across Excel versions (verified 2026-06).
     try:
         anchor = rng.Cells(1, 1)
-        if anchor.HasSpill:
+        if anchor.HasSpill and _is_spill_anchor(anchor):
             result["has_spill"] = True
-            result["spill_range"] = anchor.SpillingRange.Address
-        elif anchor.SpillParent is not None:
-            result["spill_parent"] = anchor.SpillParent.Address
+            result["spill_range"] = _spill_range_address(anchor)
+        elif not anchor.HasSpill:
+            # Check if this cell is PART of a spill (not the anchor)
+            parent_addr = _spill_parent_address(anchor)
+            if parent_addr:
+                result["spill_parent"] = parent_addr
     except Exception:
-        pass  # SpillParent/HasSpill not available in old Excel builds — ignore
+        pass  # HasSpill not available in old Excel builds — ignore
     return result
+
+
+def _is_spill_anchor(cell) -> bool:
+    """True if the cell is the anchor (top-left) of a spill range.
+
+    An anchor has HasSpill=True AND has a formula in Formula2.
+    Spill-overflow cells have HasSpill=True but empty Formula2.
+    """
+    try:
+        return bool(cell.HasSpill) and bool(cell.Formula2)
+    except Exception:
+        return False
+
+
+def _spill_range_address(anchor) -> str:
+    """Return the address of the full spill range from an anchor cell.
+
+    SpillingRange is not reliably accessible via pywin32 late-binding
+    (returns None on some Excel builds despite HasSpill=True).
+    Fallback: scan outward from the anchor via HasSpill flags.
+    """
+    # First try the COM property directly
+    try:
+        sr = anchor.SpillingRange
+        if sr is not None:
+            return sr.Address
+    except Exception:
+        pass
+
+    # Fallback: scan rows then columns while HasSpill is True
+    ws = anchor.Parent
+    anchor_row = anchor.Row
+    anchor_col = anchor.Column
+
+    # Find last spill row (scan down)
+    max_row = anchor_row
+    try:
+        for r in range(anchor_row, anchor_row + 1000):
+            cell = ws.Cells(r, anchor_col)
+            if not cell.HasSpill:
+                break
+            max_row = r
+    except Exception:
+        pass
+
+    # Find last spill column (scan right)
+    max_col = anchor_col
+    try:
+        for c in range(anchor_col, anchor_col + 1000):
+            cell = ws.Cells(anchor_row, c)
+            if not cell.HasSpill:
+                break
+            max_col = c
+    except Exception:
+        pass
+
+    end_cell = ws.Cells(max_row, max_col)
+    return ws.Range(anchor, end_cell).Address
+
+
+def _spill_parent_address(cell) -> str | None:
+    """Return the anchor cell address if this cell is part of a foreign spill.
+
+    SpillParent is also unreliable in late-binding; we try it but don't crash.
+    """
+    try:
+        sp = cell.SpillParent
+        if sp is not None:
+            return sp.Address
+    except Exception:
+        pass
+    return None
 
 
 def _read_spill(
@@ -212,8 +290,9 @@ def _read_spill(
             f"Cell '{range_str}' has no spill range (HasSpill=False). "
             "Use action='read' to read the cell value directly."
         )
-    spill_rng = anchor_cell.SpillingRange
-    spill_addr = spill_rng.Address
+    spill_addr = _spill_range_address(anchor_cell)
+    ws = anchor_cell.Parent
+    spill_rng = ws.Range(spill_addr)
     raw = spill_rng.Value
     rows, total_rows = _extract_values(raw, offset, limit)
     has_more = (offset + limit) < total_rows

@@ -96,11 +96,13 @@ native Range() parser — no special handling needed. Documented in both
 ## Dev commands
 
 ```powershell
-uv sync                          # install deps
-uv run pytest                    # unit tests (no Excel needed)
-uv run python tests/smoke_com.py # manual COM smoke (requires live Excel)
-uv run thepexcel-mcp             # run stdio server
-uv run python -c "from thepexcel_mcp.server import mcp; print('OK')"  # import check
+uv sync                                                          # install deps
+uv run pytest -q                                                 # 192 unit tests (no Excel needed)
+THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py     # full live COM smoke
+THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py --sections 1,2,3,4  # partial
+uv run thepexcel-mcp                                            # run stdio server
+uv run python scripts/build_mcpb.py                             # build dist/thepexcel-mcp.mcpb
+claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMCP thepexcel-mcp  # register
 ```
 
 ## Constraints

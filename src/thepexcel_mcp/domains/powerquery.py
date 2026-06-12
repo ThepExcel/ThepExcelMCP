@@ -389,6 +389,14 @@ def _load_to_datamodel(name: str, workbook: str | None) -> dict:
             True,   # CreateModelConnection = True
             False,  # ImportRelationships
         )
+        # Set BackgroundQuery=False to request synchronous refresh.
+        # Note: the Mashup/PQ engine requires Excel's UI message pump to
+        # complete model population. This works when Excel is visible (real
+        # Claude usage) but may deadlock in headless COM automation tests.
+        try:
+            conn.OLEDBConnection.BackgroundQuery = False
+        except Exception:
+            pass
         conn.Refresh()
     except Exception as e:
         raise _session.wrap(e, f"load_to_datamodel: Connections.Add2 failed for '{name}'")

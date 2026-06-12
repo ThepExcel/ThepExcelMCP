@@ -437,6 +437,9 @@ class TestReadSpillHelper:
             spill_rng.Address = "$E$1:$E$5"
             spill_rng.Value = tuple((v,) for v in (spill_values or [1, 2, 3]))
             anchor.SpillingRange = spill_rng
+            # _read_spill now uses _spill_range_address → ws.Range(addr)
+            # so anchor.Parent.Range() must return the same spill_rng
+            anchor.Parent.Range.return_value = spill_rng
         mock_rng.Cells.return_value = anchor
         return mock_rng
 

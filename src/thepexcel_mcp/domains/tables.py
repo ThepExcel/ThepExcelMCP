@@ -392,13 +392,20 @@ def _sort(name: str, workbook: str | None, col_name: str, ascending: bool) -> di
     lo = _find_table(wb, name)
     col_idx = _col_index(lo, col_name)
     try:
-        sort_range = lo.Range
+        # Use the ListObject's dedicated Sort object (lo.Sort), which handles
+        # header/totals rows automatically and avoids Range.Sort COM quirks.
         col_range = lo.ListColumns(col_idx).Range
-        sort_range.Sort(
-            Key1=col_range,
-            Order1=_XL_ASCENDING if ascending else _XL_DESCENDING,
-            Header=_XL_YES,
+        lo_sort = lo.Sort
+        lo_sort.SortFields.Clear()
+        lo_sort.SortFields.Add(
+            col_range,
+            1,  # xlSortOnValues
+            _XL_ASCENDING if ascending else _XL_DESCENDING,
         )
+        lo_sort.Header = _XL_YES
+        lo_sort.MatchCase = False
+        lo_sort.Orientation = 1  # xlTopToBottom
+        lo_sort.Apply()
         return {"table": name, "sorted_by": col_name, "ascending": ascending}
     except ToolError:
         raise

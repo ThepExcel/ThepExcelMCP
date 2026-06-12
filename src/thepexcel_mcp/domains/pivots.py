@@ -639,13 +639,13 @@ def _delete(name: str, workbook: str | None) -> dict:
     wb = _session.get_workbook(workbook)
     pt = _find_pivot(wb, name)
     sheet_name = pt.Parent.Name
+    # Capture the address before any operation — pt.TableRange2 COM object
+    # can become invalid mid-operation on some Excel builds.
+    # Access the range via the parent sheet for reliability.
     try:
-        pt.TableRange2.ClearContents()
-        pt.TableRange2.Clear()
-        # TableRange2 includes filter fields; this removes the pivot structure
-        # For a full delete, use PivotTableWizard.Delete() or clear the range
-        # The standard VBA approach is to select the range and delete
-        pt.TableRange2.Delete()
+        addr = pt.TableRange2.Address
+        pt_ws = pt.Parent
+        pt_ws.Range(addr).Delete()
         return {"deleted": name, "sheet": sheet_name}
     except Exception as e:
         raise _session.wrap(e, f"Delete PivotTable '{name}' failed")

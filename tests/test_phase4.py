@@ -102,6 +102,8 @@ class TestScreenshotActionDispatch:
     def _call(self, **kwargs):
         mock_session = make_mock_session()
         mock_session.get_workbook.side_effect = ToolError("no excel")
+        # _capture_sheet calls get_sheet (not get_workbook), so set both
+        mock_session.get_sheet.side_effect = ToolError("no excel")
         with patch("thepexcel_mcp.domains.screenshot._session", mock_session):
             from thepexcel_mcp.domains.screenshot import screenshot_action
             return screenshot_action(**kwargs)

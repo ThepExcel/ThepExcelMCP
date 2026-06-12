@@ -1,0 +1,44 @@
+{
+  "manifest_version": "0.4",
+  "name": "thepexcel-excel",
+  "display_name": "ThepExcel Excel MCP",
+  "version": "0.1.0",
+  "description": "Full Excel control via COM — Power Query, PivotTables, Data Model/DAX, VBA, dynamic arrays, charts, screenshots. Windows only.",
+  "author": {
+    "name": "ThepExcel",
+    "email": "sira.ekabut@gmail.com"
+  },
+  "license": "MIT",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/thepexcel_mcp/server.py"
+  },
+  "compatibility": {
+    "platforms": ["win32"]
+  },
+  "tools": [
+    {"name": "excel_workbook",   "description": "List, open, save, close, and inspect Excel workbooks"},
+    {"name": "excel_sheet",      "description": "Add, rename, delete, and list worksheets"},
+    {"name": "excel_range",      "description": "Read/write cell ranges, formulas, and dynamic array spill zones"},
+    {"name": "excel_powerquery", "description": "Create, edit, load, and refresh Power Query (M code) queries"},
+    {"name": "excel_table",      "description": "Create and manage Excel structured tables (ListObjects)"},
+    {"name": "excel_pivot",      "description": "Build and configure PivotTables from tables or Data Model"},
+    {"name": "excel_datamodel",  "description": "Manage the Excel Data Model: tables, relationships, DAX measures"},
+    {"name": "excel_vba",        "description": "Read, write, and run VBA modules (requires trust setting)"},
+    {"name": "excel_name",       "description": "Manage named ranges and LAMBDA custom functions"},
+    {"name": "excel_chart",      "description": "Create, configure, and export Excel charts"},
+    {"name": "excel_screenshot", "description": "Capture PNG screenshots of ranges, sheets, or charts"}
+  ],
+  "user_config": {
+    "autolaunch": {
+      "type": "boolean",
+      "description": "Auto-launch Excel if no instance is running",
+      "default": false
+    },
+    "enable_vba": {
+      "type": "boolean",
+      "description": "Enable the excel_vba tool (requires VBA project object model trust setting in Excel)",
+      "default": false
+    }
+  }
+}
