@@ -20,6 +20,11 @@ packages = ["src/thepexcel_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
 # smoke_com.py is NOT collected — it requires a live Excel instance
-collect_ignore = ["tests/smoke_com.py"]
+# collect_ignore is a conftest.py option, not an ini option; we rely on
+# the naming convention (smoke_com.py does not match test_*.py pattern)
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+]
