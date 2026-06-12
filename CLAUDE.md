@@ -31,7 +31,9 @@ FastMCP server (server.py)
 | `src/thepexcel_mcp/domains/workbook.py` | Workbook CRUD |
 | `src/thepexcel_mcp/domains/sheets.py` | Sheet CRUD |
 | `src/thepexcel_mcp/domains/ranges.py` | Range read (paginated) / write / write_formula (Formula2) / clear |
-| `src/thepexcel_mcp/domains/powerquery.py` | 10 PQ operations — ported from ThepExcel-PQ-MCP PoC |
+| `src/thepexcel_mcp/domains/powerquery.py` | 10 PQ operations — create/update include M code warnings |
+| `src/thepexcel_mcp/domains/tables.py` | 11 Table (ListObject) operations |
+| `src/thepexcel_mcp/domains/pivots.py` | 9 PivotTable operations |
 | `src/thepexcel_mcp/analysis/pq_analyzer.py` | M code static analyzer — copied verbatim from PoC |
 
 ### load_to_table pattern (important)
@@ -44,14 +46,22 @@ to load a query into a worksheet Table. This exact form is required:
 
 Do NOT simplify this — it took real debugging in the PoC to get right.
 
-## Tool registry (Phase 0)
+## Tool registry (Phase 1)
 
 | Tool | Actions |
 |---|---|
 | `excel_workbook` | `list`, `info`, `open`, `save`, `close` |
 | `excel_sheet` | `list`, `add`, `rename`, `delete` |
 | `excel_range` | `read` (paginated, 100-row default), `write`, `write_formula` (Formula2/dynamic arrays), `clear` |
-| `excel_powerquery` | `list`, `get`, `create`, `update`, `delete`, `refresh`, `refresh_all`, `load_to_table`, `analyze`, `analyze_raw` |
+| `excel_powerquery` | `list`, `get`, `create`, `update`, `delete`, `refresh`, `refresh_all`, `load_to_table`, `analyze`, `analyze_raw`. `create`/`update` return `warnings` list from M code analyzer (non-blocking). |
+| `excel_table` | `list`, `create`, `read` (paginated), `append_rows`, `add_column` (with formula), `sort`, `filter` (equals/contains/greater/less/clear_filters), `set_style`, `toggle_totals` (per-column aggregation), `rename`, `delete` (keep_data/unlist) |
+| `excel_pivot` | `list`, `create` (range/table/datamodel source), `add_field` (with aggregation+number_format), `remove_field`, `move_field`, `set_layout` (compact/outline/tabular + subtotals + grand_totals), `refresh`, `delete`, `read` (paginated via TableRange1) |
+
+### Structured references
+
+`excel_range(action="read", range="TableName[ColumnName]")` works via Excel's
+native Range() parser — no special handling needed. Documented in both
+`excel_range` and `excel_table` docstrings.
 
 ## Dev commands
 
@@ -72,8 +82,6 @@ uv run python -c "from thepexcel_mcp.server import mcp; print('OK')"  # import c
 
 ## Future phases
 
-- **Phase 1:** Tables / ListObjects (create, query, add rows)
-- **Phase 2:** PivotTables (create, refresh, field config)
-- **Phase 3:** Data Model / DAX (measures, relationships via `Model.ModelMeasures`)
-- **Phase 4:** VBA execution (`Application.Run`)
-- **Phase 5:** Charts
+- **Phase 2:** Data Model / DAX (measures, relationships via `Model.ModelMeasures`)
+- **Phase 3:** VBA execution (`Application.Run`)
+- **Phase 4:** Charts

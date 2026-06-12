@@ -149,7 +149,9 @@ def _create(name: str, formula: str, description: str, workbook: str | None) -> 
         q = wb.Queries.Add(name, formula)
         if description:
             q.Description = description
-        return _format_result(q)
+        result = _format_result(q)
+        result["warnings"] = _get_warnings(q)
+        return result
     except Exception as e:
         raise _session.wrap(e, f"Create query '{name}' failed")
 
@@ -170,7 +172,11 @@ def _update(
             q.Description = description
         if new_name is not None:
             q.Name = new_name
-        return _format_result(q)
+        result = _format_result(q)
+        # Include M code warnings only when formula was changed
+        if formula is not None:
+            result["warnings"] = _get_warnings(q)
+        return result
     except Exception as e:
         raise _session.wrap(e, f"Update query '{name}' failed")
 
@@ -304,6 +310,19 @@ def _load_to_table(
         "table": lo.Name,
         "rows": rows,
     }
+
+
+def _get_warnings(q) -> list[str]:
+    """Run M code analyzer and return warning/error messages (non-blocking)."""
+    try:
+        result = analyze_mcode(q.Name, q.Formula)
+        return [
+            f"[{i.severity}] {i.rule}: {i.message}"
+            for i in result.issues
+            if i.severity in ("warning", "error")
+        ]
+    except Exception:
+        return []
 
 
 def _analyze(name: str, workbook: str | None) -> dict:
