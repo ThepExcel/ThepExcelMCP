@@ -64,38 +64,40 @@ def powerquery_action(
     analyze_raw
         Analyze M code provided directly (no Excel needed). Requires ``raw_formula``.
     """
-    if action == "list":
-        return _list(workbook)
-    if action == "get":
-        _require(name, "name", action)
-        return _get(name, workbook)
-    if action == "create":
-        _require(name, "name", action)
-        _require(formula, "formula", action)
-        return _create(name, formula, description or "", workbook)
-    if action == "update":
-        _require(name, "name", action)
-        return _update(name, formula, description, new_name, workbook)
-    if action == "delete":
-        _require(name, "name", action)
-        return _delete(name, workbook)
-    if action == "refresh":
-        _require(name, "name", action)
-        return _refresh(name, workbook)
-    if action == "refresh_all":
-        return _refresh_all(workbook)
-    if action == "load_to_table":
-        _require(name, "name", action)
-        return _load_to_table(name, sheet_name, workbook)
-    if action == "load_to_datamodel":
-        _require(name, "name", action)
-        return _load_to_datamodel(name, workbook)
-    if action == "analyze":
-        _require(name, "name", action)
-        return _analyze(name, workbook)
+    # Validate args (pure Python) before entering the COM worker
+    # analyze_raw is pure Python (no COM) — skip run_com
     if action == "analyze_raw":
         _require(raw_formula, "raw_formula", action)
         return _analyze_raw(raw_formula, name or "unnamed")
+    if action == "list":
+        return _session.run_com(_list, workbook)
+    if action == "get":
+        _require(name, "name", action)
+        return _session.run_com(_get, name, workbook)
+    if action == "create":
+        _require(name, "name", action)
+        _require(formula, "formula", action)
+        return _session.run_com(_create, name, formula, description or "", workbook)
+    if action == "update":
+        _require(name, "name", action)
+        return _session.run_com(_update, name, formula, description, new_name, workbook)
+    if action == "delete":
+        _require(name, "name", action)
+        return _session.run_com(_delete, name, workbook)
+    if action == "refresh":
+        _require(name, "name", action)
+        return _session.run_com(_refresh, name, workbook)
+    if action == "refresh_all":
+        return _session.run_com(_refresh_all, workbook)
+    if action == "load_to_table":
+        _require(name, "name", action)
+        return _session.run_com(_load_to_table, name, sheet_name, workbook)
+    if action == "load_to_datamodel":
+        _require(name, "name", action)
+        return _session.run_com(_load_to_datamodel, name, workbook)
+    if action == "analyze":
+        _require(name, "name", action)
+        return _session.run_com(_analyze, name, workbook)
     raise ToolError(
         f"Unknown action '{action}'. Valid: list, get, create, update, delete, "
         "refresh, refresh_all, load_to_table, load_to_datamodel, analyze, analyze_raw."

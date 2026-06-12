@@ -15,13 +15,18 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from fastmcp.exceptions import ToolError
+from conftest import make_mock_session
 
 
 # ── Import guard: all COM imports happen inside the module, not at collection ──
 
 def _action(**kwargs):
-    """Call datamodel_action with a patched _session that never reaches COM."""
-    mock_session = MagicMock()
+    """Call datamodel_action with a patched _session that never reaches COM.
+
+    run_com is a transparent passthrough so validation and helper logic runs
+    synchronously in the test process (no STA worker, no Excel needed).
+    """
+    mock_session = make_mock_session()
     mock_session.get_workbook.side_effect = ToolError("no excel")
     with patch("thepexcel_mcp.domains.datamodel._session", mock_session):
         from thepexcel_mcp.domains.datamodel import datamodel_action
@@ -179,7 +184,7 @@ class TestAddTableSourceType:
 
     def _action_with_wb(self, source_type, source_name):
         """Patch session to succeed (return mock wb), let domain logic run."""
-        mock_session = MagicMock()
+        mock_session = make_mock_session()
         mock_wb = MagicMock()
         mock_wb.Sheets.Count = 0
         mock_wb.Queries.Count = 0

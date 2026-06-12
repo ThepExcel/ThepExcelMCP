@@ -10,11 +10,13 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
 
 from .domains.datamodel import datamodel_action
+from .domains.names import name_action
 from .domains.pivots import pivot_action
 from .domains.powerquery import powerquery_action
 from .domains.ranges import range_action
 from .domains.sheets import sheet_action
 from .domains.tables import table_action
+from .domains.vba import vba_action
 from .domains.workbook import workbook_action
 
 mcp = FastMCP(
@@ -120,7 +122,7 @@ def excel_range(
     Parameters
     ----------
     action : str
-        One of: ``read``, ``write``, ``write_formula``, ``clear``.
+        One of: ``read``, ``read_spill``, ``write``, ``write_formula``, ``clear``.
     range : str
         Range address. Examples:
         - ``"A1:C10"`` — standard A1 notation (active sheet)
@@ -149,7 +151,17 @@ def excel_range(
         Returns cell values as a 2-D list with pagination metadata.
         Strings longer than 500 chars are truncated. Response includes
         ``has_more`` and ``next_offset`` for continuation.
+        When the top-left cell is a spill anchor, the response also includes
+        ``has_spill: true`` and ``spill_range`` (the spill address).
+        When the top-left cell is part of someone else's spill, the response
+        includes ``spill_parent`` (the anchor cell address).
         Example: ``excel_range(action="read", range="A1:D100")``
+    read_spill
+        Returns the complete spill range for a dynamic-array anchor cell
+        (XLOOKUP, UNIQUE, FILTER, SORT, SEQUENCE, etc.).
+        Raises an error if the cell has no spill (HasSpill=False).
+        Paginated via ``offset`` / ``limit``.
+        Example: ``excel_range(action="read_spill", range="E1")``
     write
         Writes a 2-D list of values starting at the top-left of the range.
         Example: ``excel_range(action="write", range="A1", values=[[1,"Jan"],[2,"Feb"]])``
@@ -678,6 +690,133 @@ def excel_datamodel(
         new_formula=new_formula,
         new_format_type=new_format_type,
         new_description=new_description,
+    )
+
+
+@mcp.tool()
+def excel_vba(
+    action: str,
+    workbook: str | None = None,
+    module_name: str | None = None,
+    code: str | None = None,
+    proc_name: str | None = None,
+    args: list | None = None,
+) -> dict:
+    """Execute and manage VBA modules in Excel.
+
+    Security: Entire tool disabled unless THEPEXCEL_MCP_ENABLE_VBA=1 is set.
+    A pre-flight check also verifies that Excel's "Trust access to the VBA
+    project object model" setting is enabled (AccessVBOM=1 in registry).
+
+    Parameters
+    ----------
+    action : str
+        One of: ``list_modules``, ``get_module``, ``write_module``,
+        ``delete_module``, ``run``.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    module_name : str, optional
+        VBA module name for get/write/delete operations.
+    code : str, optional
+        Full VBA source code for ``write_module``.
+    proc_name : str, optional
+        Macro name for ``run``. Format: ``"Module1.ProcName"`` or ``"ProcName"``.
+    args : list, optional
+        Positional arguments for ``run`` (scalars only: str/int/float/bool/None).
+
+    Actions
+    -------
+    list_modules
+        List all VBA modules: name, type, line count.
+        Types: standard, class, form, document.
+        Example: ``excel_vba(action="list_modules")``
+    get_module
+        Return full source code of a module. Requires ``module_name``.
+        Example: ``excel_vba(action="get_module", module_name="Module1")``
+    write_module
+        Create or replace a standard module. Requires ``module_name`` and ``code``.
+        If the module exists, all lines are replaced atomically.
+        Note: to save a workbook with VBA, save as .xlsm or .xlsb — COM cannot
+        coerce a .xlsx file to a macro-enabled format automatically.
+        Example: ``excel_vba(action="write_module", module_name="Helpers",
+        code="Sub Hello()\\n  MsgBox \\"Hi\\"\\nEnd Sub")``
+    delete_module
+        Delete a standard module. Requires ``module_name``.
+        Document modules (Sheet*, ThisWorkbook) cannot be deleted.
+        Example: ``excel_vba(action="delete_module", module_name="OldModule")``
+    run
+        Execute a macro via Application.Run. Requires ``proc_name``.
+        Functions return their value; Subs return null.
+        Example: ``excel_vba(action="run", proc_name="Module1.CalcTax",
+        args=[1000, 0.07])``
+    """
+    return vba_action(
+        action,
+        workbook=workbook,
+        module_name=module_name,
+        code=code,
+        proc_name=proc_name,
+        args=args,
+    )
+
+
+@mcp.tool()
+def excel_name(
+    action: str,
+    workbook: str | None = None,
+    name: str | None = None,
+    refers_to: str | None = None,
+    scope: str | None = None,
+) -> dict:
+    """Manage defined names: named ranges, constants, and LAMBDA formulas.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``list``, ``get``, ``set``, ``delete``.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    name : str, optional
+        Name to get/set/delete. Case-insensitive.
+    refers_to : str, optional
+        Definition for ``set``. Must start with ``=``.
+        Named range: ``"=Sheet1!$A$1:$B$10"``
+        LAMBDA: ``"=LAMBDA(x, x*2)"``
+        Constant: ``"=42"``
+    scope : str, optional
+        ``"workbook"`` (default) for workbook-scope, or a sheet name for
+        sheet-local scope. Sheet-local names shadow workbook names on that sheet.
+
+    Actions
+    -------
+    list
+        All defined names with: name, refers_to, scope, is_lambda flag.
+        ``is_lambda=true`` when RefersTo starts with ``=LAMBDA(``.
+        Example: ``excel_name(action="list")``
+    get
+        Details for a single name. Requires ``name``.
+        Example: ``excel_name(action="get", name="SalesTotal")``
+    set
+        Create or update a name. Requires ``name`` and ``refers_to``.
+        Example (named range):
+            ``excel_name(action="set", name="MyRange",
+            refers_to="=Sheet1!$A$1:$C$10")``
+        Example (LAMBDA — available as =DOUBLE(A1) in cells):
+            ``excel_name(action="set", name="DOUBLE",
+            refers_to="=LAMBDA(x, x*2)")``
+        Example (LAMBDA with multiple params):
+            ``excel_name(action="set", name="TAX",
+            refers_to='=LAMBDA(amount, rate, amount*rate/100)')``
+    delete
+        Delete a name. Requires ``name``.
+        Example: ``excel_name(action="delete", name="OldName")``
+    """
+    return name_action(
+        action,
+        workbook=workbook,
+        name=name,
+        refers_to=refers_to,
+        scope=scope,
     )
 
 

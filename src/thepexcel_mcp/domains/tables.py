@@ -134,51 +134,52 @@ def table_action(
         ``keep_data=False`` deletes the entire data range.
         Example: ``excel_table(action="delete", name="OldTable")``
     """
+    # Validate args (pure Python) before entering the COM worker
     if action == "list":
-        return _list(workbook)
+        return _session.run_com(_list, workbook)
     if action == "create":
         _require(name, "name", action)
         _require(range, "range", action)
-        return _create(name, range, sheet, workbook, style or _DEFAULT_STYLE, has_headers)
+        return _session.run_com(_create, name, range, sheet, workbook, style or _DEFAULT_STYLE, has_headers)
     if action == "read":
         _require(name, "name", action)
-        return _read(name, workbook, columns, offset, limit)
+        return _session.run_com(_read, name, workbook, columns, offset, limit)
     if action == "append_rows":
         _require(name, "name", action)
         if not values:
             raise ToolError("action='append_rows' requires 'values' (2-D list).")
-        return _append_rows(name, workbook, values)
+        return _session.run_com(_append_rows, name, workbook, values)
     if action == "add_column":
         _require(name, "name", action)
         _require(column_name, "column_name", action)
-        return _add_column(name, workbook, column_name, formula)
+        return _session.run_com(_add_column, name, workbook, column_name, formula)
     if action == "sort":
         _require(name, "name", action)
         _require(sort_column, "sort_column", action)
-        return _sort(name, workbook, sort_column, ascending)
+        return _session.run_com(_sort, name, workbook, sort_column, ascending)
     if action == "filter":
         _require(name, "name", action)
         _require(filter_column, "filter_column", action)
         if filter_op == "clear_filters":
-            return _clear_filters(name, workbook)
+            return _session.run_com(_clear_filters, name, workbook)
         _require(filter_op, "filter_op", action)
-        return _filter(name, workbook, filter_column, filter_op, filter_value)
+        return _session.run_com(_filter, name, workbook, filter_column, filter_op, filter_value)
     if action == "set_style":
         _require(name, "name", action)
         _require(style, "style", action)
-        return _set_style(name, workbook, style)
+        return _session.run_com(_set_style, name, workbook, style)
     if action == "toggle_totals":
         _require(name, "name", action)
         if show_totals is None:
             raise ToolError("action='toggle_totals' requires 'show_totals' (bool).")
-        return _toggle_totals(name, workbook, show_totals, column_name, total_func)
+        return _session.run_com(_toggle_totals, name, workbook, show_totals, column_name, total_func)
     if action == "rename":
         _require(name, "name", action)
         _require(new_name, "new_name", action)
-        return _rename(name, workbook, new_name)
+        return _session.run_com(_rename, name, workbook, new_name)
     if action == "delete":
         _require(name, "name", action)
-        return _delete(name, workbook, keep_data)
+        return _session.run_com(_delete, name, workbook, keep_data)
     raise ToolError(
         f"Unknown action '{action}'. Valid: list, create, read, append_rows, "
         "add_column, sort, filter, set_style, toggle_totals, rename, delete."

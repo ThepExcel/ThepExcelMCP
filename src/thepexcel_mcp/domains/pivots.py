@@ -149,38 +149,39 @@ def pivot_action(
         Returns ``{values, total_rows, has_more, next_offset}``.
         Example: ``excel_pivot(action="read", name="SalesPivot", limit=50)``
     """
+    # Validate args (pure Python) before entering the COM worker
     if action == "list":
-        return _list(workbook)
+        return _session.run_com(_list, workbook)
     if action == "create":
         _require(source, "source", action)
         _require(name, "name", action)
-        return _create(name, source, dest_sheet, dest_cell, workbook)
+        return _session.run_com(_create, name, source, dest_sheet, dest_cell, workbook)
     if action == "add_field":
         _require(name, "name", action)
         _require(field, "field", action)
         _require(area, "area", action)
-        return _add_field(name, workbook, field, area, aggregation, number_format)
+        return _session.run_com(_add_field, name, workbook, field, area, aggregation, number_format)
     if action == "remove_field":
         _require(name, "name", action)
         _require(field, "field", action)
-        return _remove_field(name, workbook, field)
+        return _session.run_com(_remove_field, name, workbook, field)
     if action == "move_field":
         _require(name, "name", action)
         _require(field, "field", action)
         _require(area, "area", action)
-        return _move_field(name, workbook, field, area, aggregation, number_format)
+        return _session.run_com(_move_field, name, workbook, field, area, aggregation, number_format)
     if action == "set_layout":
         _require(name, "name", action)
-        return _set_layout(name, workbook, layout, subtotals, grand_totals)
+        return _session.run_com(_set_layout, name, workbook, layout, subtotals, grand_totals)
     if action == "refresh":
         _require(name, "name", action)
-        return _refresh(name, workbook)
+        return _session.run_com(_refresh, name, workbook)
     if action == "delete":
         _require(name, "name", action)
-        return _delete(name, workbook)
+        return _session.run_com(_delete, name, workbook)
     if action == "read":
         _require(name, "name", action)
-        return _read(name, workbook, offset, limit)
+        return _session.run_com(_read, name, workbook, offset, limit)
     raise ToolError(
         f"Unknown action '{action}'. Valid: list, create, add_field, remove_field, "
         "move_field, set_layout, refresh, delete, read."

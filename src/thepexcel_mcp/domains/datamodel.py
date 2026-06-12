@@ -125,46 +125,49 @@ def datamodel_action(
     refresh
         Model.Refresh() — refreshes all data sources and reprocesses.
     """
+    # Validate args (pure Python) before entering the COM worker
     if action == "info":
-        return _info(workbook)
+        return _session.run_com(_info, workbook)
     if action == "list_tables":
-        return _list_tables(workbook)
+        return _session.run_com(_list_tables, workbook)
     if action == "add_table":
         _require(source_type, "source_type", action)
         _require(source_name, "source_name", action)
-        return _add_table(source_type, source_name, workbook)
+        return _session.run_com(_add_table, source_type, source_name, workbook)
     if action == "list_relationships":
-        return _list_relationships(workbook)
+        return _session.run_com(_list_relationships, workbook)
     if action == "add_relationship":
         _require(from_table, "from_table", action)
         _require(from_column, "from_column", action)
         _require(to_table, "to_table", action)
         _require(to_column, "to_column", action)
-        return _add_relationship(from_table, from_column, to_table, to_column, workbook)
+        return _session.run_com(_add_relationship, from_table, from_column, to_table, to_column, workbook)
     if action == "delete_relationship":
         _require(relationship_index, "relationship_index", action)
-        return _delete_relationship(relationship_index, workbook)
+        return _session.run_com(_delete_relationship, relationship_index, workbook)
     if action == "list_measures":
-        return _list_measures(workbook)
+        return _session.run_com(_list_measures, workbook)
     if action == "add_measure":
         _require(measure_name, "measure_name", action)
         _require(table, "table", action)
         _require(formula, "formula", action)
-        return _add_measure(
+        return _session.run_com(
+            _add_measure,
             measure_name, table, formula, format_type, decimal_places,
             use_thousand_sep, description, workbook
         )
     if action == "update_measure":
         _require(measure_name, "measure_name", action)
-        return _update_measure(
+        return _session.run_com(
+            _update_measure,
             measure_name, new_formula, new_format_type, new_description,
             decimal_places, use_thousand_sep, workbook
         )
     if action == "delete_measure":
         _require(measure_name, "measure_name", action)
-        return _delete_measure(measure_name, workbook)
+        return _session.run_com(_delete_measure, measure_name, workbook)
     if action == "refresh":
-        return _refresh(workbook)
+        return _session.run_com(_refresh, workbook)
     raise ToolError(
         f"Unknown action '{action}'. Valid: info, list_tables, add_table, "
         "list_relationships, add_relationship, delete_relationship, "

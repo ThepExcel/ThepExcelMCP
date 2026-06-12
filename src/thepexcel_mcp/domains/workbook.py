@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastmcp.exceptions import ToolError
 
-from ..session import ExcelSession
+from ..session import ExcelSession, excel_guard
 
 _session = ExcelSession()
 
@@ -29,21 +29,27 @@ def workbook_action(
     close
         Close without saving. Does NOT prompt — caller's responsibility.
     """
+    # Validate args outside run_com (pure Python, no COM needed)
+    if action == "open" and not path:
+        raise ToolError("action='open' requires the 'path' parameter.")
+    if action not in ("list", "info", "open", "save", "close"):
+        raise ToolError(
+            f"Unknown action '{action}'. Valid: list, info, open, save, close."
+        )
+    return _session.run_com(_dispatch, action, workbook, path)
+
+
+def _dispatch(action: str, workbook: str | None, path: str | None) -> dict:
+    """Executed on the COM worker thread."""
     if action == "list":
         return _list()
     if action == "info":
         return _info(workbook)
     if action == "open":
-        if not path:
-            raise ToolError("action='open' requires the 'path' parameter.")
         return _open(path)
     if action == "save":
         return _save(workbook)
-    if action == "close":
-        return _close(workbook)
-    raise ToolError(
-        f"Unknown action '{action}'. Valid: list, info, open, save, close."
-    )
+    return _close(workbook)  # action == "close"
 
 
 def _list() -> dict:
@@ -95,7 +101,8 @@ def _open(path: str) -> dict:
 def _save(workbook: str | None) -> dict:
     wb = _session.get_workbook(workbook)
     try:
-        wb.Save()
+        with excel_guard(wb.Application):
+            wb.Save()
         return {"saved": wb.Name}
     except Exception as e:
         raise _session.wrap(e, "Save failed")
@@ -105,7 +112,8 @@ def _close(workbook: str | None) -> dict:
     wb = _session.get_workbook(workbook)
     name = wb.Name
     try:
-        wb.Close(SaveChanges=False)
+        with excel_guard(wb.Application):
+            wb.Close(SaveChanges=False)
         return {"closed": name}
     except Exception as e:
         raise _session.wrap(e, "Close failed")

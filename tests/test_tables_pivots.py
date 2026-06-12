@@ -11,18 +11,23 @@ from __future__ import annotations
 import pytest
 
 from fastmcp.exceptions import ToolError
+from conftest import make_mock_session
 
 
 # ── Tables: argument validation ────────────────────────────────────────────────
 
 class TestTableActionDispatch:
-    """Verify _require guards fire before any COM call."""
+    """Verify _require guards fire before any COM call.
+
+    run_com is a transparent passthrough so _require guards execute synchronously
+    in the test process (no STA worker, no Excel needed).
+    """
 
     def _call(self, **kwargs):
         # Import here so that COM imports at module level don't blow up test
         # collection on non-Windows. We mock _session so no live Excel needed.
-        from unittest.mock import MagicMock, patch
-        mock_session = MagicMock()
+        from unittest.mock import patch
+        mock_session = make_mock_session()
         mock_session.get_workbook.side_effect = ToolError("no excel")
         with patch("thepexcel_mcp.domains.tables._session", mock_session):
             from thepexcel_mcp.domains.tables import table_action
@@ -46,11 +51,9 @@ class TestTableActionDispatch:
 
     def test_append_rows_missing_values(self):
         # name provided → gets past _require(name) → hits values check
-        from unittest.mock import MagicMock, patch
-        mock_wb = MagicMock()
-        mock_session = MagicMock()
-        mock_session.get_workbook.return_value = mock_wb
-        mock_wb.Sheets.Count = 0
+        # (ToolError is raised before run_com, so no passthrough needed)
+        from unittest.mock import patch
+        mock_session = make_mock_session()
         with patch("thepexcel_mcp.domains.tables._session", mock_session):
             from thepexcel_mcp.domains.tables import table_action
             with pytest.raises(ToolError, match="requires 'values'"):
@@ -127,7 +130,7 @@ class TestTableFilterOp:
     def test_invalid_filter_op_raises(self):
         from unittest.mock import MagicMock, patch
         mock_wb = MagicMock()
-        mock_session = MagicMock()
+        mock_session = make_mock_session()
         mock_session.get_workbook.return_value = mock_wb
         # Return empty table list so _find_table raises ToolError
         mock_wb.Sheets.Count = 0
@@ -149,8 +152,8 @@ class TestPivotActionDispatch:
     """Verify _require guards fire before any COM call."""
 
     def _call(self, **kwargs):
-        from unittest.mock import MagicMock, patch
-        mock_session = MagicMock()
+        from unittest.mock import patch
+        mock_session = make_mock_session()
         mock_session.get_workbook.side_effect = ToolError("no excel")
         with patch("thepexcel_mcp.domains.pivots._session", mock_session):
             from thepexcel_mcp.domains.pivots import pivot_action
