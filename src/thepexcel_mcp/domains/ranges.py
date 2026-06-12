@@ -21,6 +21,7 @@ def range_action(
     formula: str | None = None,
     offset: int = 0,
     limit: int = _DEFAULT_LIMIT,
+    python_code: str | None = None,
 ) -> dict:
     """Dispatch a range action.
 
@@ -52,6 +53,33 @@ def range_action(
         Write a formula string via ``Range.Formula2`` to the top-left cell.
         Excel spills dynamic array results automatically.
         ``formula`` must start with ``=`` (e.g. ``"=UNIQUE(A1:A100)"``).
+    write_py
+        Insert a Python-in-Excel formula (``=PY()``) into a single cell via
+        ``Range.Formula2R1C1``. Requires ``python_code``.
+
+        **IMPORTANT CAVEATS** (read before use):
+        - Execution is asynchronous in Microsoft Azure cloud. The cell shows
+          ``#BUSY!`` or ``#CONNECT!`` until Azure processes the formula.
+          Requires an M365 subscription with Python in Excel enabled (Preview
+          or GA channel as of 2026).
+        - This tool CANNOT await results. Use ``excel_range(action="read",
+          range="A1")`` in a subsequent call to fetch the computed value.
+        - Offline or unsupported accounts: formula shows ``#CONNECT!`` or
+          ``#BUSY!`` errors permanently.
+        - The ``=PY()`` second argument: ``0`` = return value as Excel type,
+          ``1`` = return as Python object (shows custom Python icon in cell).
+          This tool always inserts ``0`` (Excel value mode).
+        - **Experimental**: the COM insertion path (Formula2R1C1) works in
+          testing but Microsoft does not formally document it for automation.
+          Treat results as best-effort.
+        - Office Scripts: not supported (cloud-only, no COM path) — use
+          ``excel_vba`` instead.
+
+        Escaping: any double-quote characters in ``python_code`` are
+        automatically doubled for the Excel formula string.
+
+        Example: ``excel_range(action="write_py", range="A1",
+        python_code="import pandas as pd\\ndf = pd.DataFrame({'x': [1,2,3]})")``
     clear
         Clear cell contents (not formatting).
     """
@@ -60,9 +88,13 @@ def range_action(
         raise ToolError("action='write' requires 'values' (2-D list).")
     if action == "write_formula" and not formula:
         raise ToolError("action='write_formula' requires 'formula' starting with '='.")
-    if action not in ("read", "read_spill", "write", "write_formula", "clear"):
+    if action == "write_py":
+        if not python_code:
+            raise ToolError("action='write_py' requires 'python_code' (non-empty string).")
+        return _session.run_com(_write_py, range, sheet, workbook, python_code)
+    if action not in ("read", "read_spill", "write", "write_formula", "write_py", "clear"):
         raise ToolError(
-            f"Unknown action '{action}'. Valid: read, read_spill, write, write_formula, clear."
+            f"Unknown action '{action}'. Valid: read, read_spill, write, write_formula, write_py, clear."
         )
     return _session.run_com(_dispatch, action, range, sheet, workbook, values, formula, offset, limit)
 
@@ -237,3 +269,43 @@ def _clear(range_str: str, sheet: str | None, workbook: str | None) -> dict:
         return {"cleared": range_str}
     except Exception as e:
         raise _session.wrap(e, "Clear failed")
+
+
+def _build_py_formula(python_code: str) -> str:
+    """Build the =PY("code",0) formula string with proper escaping.
+
+    Excel formula string escaping: double-quote characters inside the code
+    string must be doubled. Example: s = "hi" becomes the formula
+    =PY("s = \\"hi\\"",0) where each embedded quote is doubled.
+
+    Verified format via Microsoft Q&A (2023): Range.Formula2R1C1 = '=PY("code",0)'
+    """
+    if not python_code:
+        raise ToolError("python_code must be a non-empty string.")
+    escaped = python_code.replace('"', '""')
+    return f'=PY("{escaped}",0)'
+
+
+def _write_py(
+    range_str: str,
+    sheet: str | None,
+    workbook: str | None,
+    python_code: str,
+) -> dict:
+    formula = _build_py_formula(python_code)
+    rng = _resolve_range(range_str, sheet, workbook)
+    cell = rng.Cells(1, 1)
+    try:
+        # Formula2R1C1 is required for =PY() insertion (per MS Q&A verification)
+        cell.Formula2R1C1 = formula
+        return {
+            "cell": cell.Address,
+            "formula_inserted": formula,
+            "note": (
+                "PY formula inserted. Execution is asynchronous in Azure cloud. "
+                "Use excel_range(action='read') after a delay to fetch the result. "
+                "Cell shows #BUSY! until Azure processes the formula."
+            ),
+        }
+    except Exception as e:
+        raise _session.wrap(e, "Insert =PY() formula failed — ensure M365 Python in Excel is enabled")
