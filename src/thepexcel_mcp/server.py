@@ -9,11 +9,13 @@ from __future__ import annotations
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
 
+from .domains.charts import chart_action
 from .domains.datamodel import datamodel_action
 from .domains.names import name_action
 from .domains.pivots import pivot_action
 from .domains.powerquery import powerquery_action
 from .domains.ranges import range_action
+from .domains.screenshot import screenshot_action
 from .domains.sheets import sheet_action
 from .domains.tables import table_action
 from .domains.vba import vba_action
@@ -116,13 +118,15 @@ def excel_range(
     formula: str | None = None,
     offset: int = 0,
     limit: int = 100,
+    python_code: str | None = None,
 ) -> dict:
     """Read and write cell ranges.
 
     Parameters
     ----------
     action : str
-        One of: ``read``, ``read_spill``, ``write``, ``write_formula``, ``clear``.
+        One of: ``read``, ``read_spill``, ``write``, ``write_formula``,
+        ``write_py``, ``clear``.
     range : str
         Range address. Examples:
         - ``"A1:C10"`` — standard A1 notation (active sheet)
@@ -144,6 +148,10 @@ def excel_range(
         Row offset for ``read`` pagination (default 0).
     limit : int, optional
         Max rows to return per ``read`` call (default 100). Reduce for large ranges.
+    python_code : str, optional
+        Python source code string for ``write_py``. Multi-line supported
+        (use ``\\n`` or actual newlines). Double-quote characters are
+        automatically escaped for the Excel formula string.
 
     Actions
     -------
@@ -169,6 +177,16 @@ def excel_range(
         Writes a dynamic-array formula via ``Formula2`` to the top-left cell.
         Excel spills results automatically (XLOOKUP, UNIQUE, FILTER, SORT, etc.).
         Example: ``excel_range(action="write_formula", range="E1", formula="=SORT(A1:A20)")``
+    write_py
+        Insert a Python-in-Excel ``=PY()`` formula. Requires ``python_code``.
+        IMPORTANT: execution is asynchronous in Azure cloud. The cell shows
+        ``#BUSY!`` until Azure processes it. Requires M365 with Python in
+        Excel enabled. Cannot await results — use ``read`` in a follow-up call.
+        Experimental: COM insertion path is not officially documented by Microsoft.
+        Office Scripts: not supported (cloud-only, no COM path) — use
+        ``excel_vba`` instead.
+        Example: ``excel_range(action="write_py", range="A1",
+        python_code="import pandas as pd\\ndf = xl('A1:C10', headers=True)")``
     clear
         Clears cell contents (preserves formatting).
         Example: ``excel_range(action="clear", range="A1:Z100")``
@@ -182,6 +200,7 @@ def excel_range(
         formula=formula,
         offset=offset,
         limit=limit,
+        python_code=python_code,
     )
 
 
@@ -817,6 +836,181 @@ def excel_name(
         name=name,
         refers_to=refers_to,
         scope=scope,
+    )
+
+
+@mcp.tool()
+def excel_chart(
+    action: str,
+    name: str | None = None,
+    workbook: str | None = None,
+    sheet: str | None = None,
+    source: str | None = None,
+    chart_type: str | None = None,
+    position: str | None = None,
+    width: float | None = None,
+    height: float | None = None,
+    title: str | None = None,
+    dest_sheet: str | None = None,
+    x_title: str | None = None,
+    y_title: str | None = None,
+    legend: bool | None = None,
+    legend_position: str | None = None,
+    data_labels: bool | None = None,
+    series_names: list | None = None,
+    secondary_series: str | None = None,
+    output_path: str | None = None,
+) -> dict:
+    """Create and manage Excel charts (ChartObjects / embedded charts).
+
+    Parameters
+    ----------
+    action : str
+        One of: ``list``, ``create``, ``configure``, ``set_source``,
+        ``export_image``, ``delete``.
+    name : str, optional
+        Chart name. Required for ``configure``, ``set_source``,
+        ``export_image``, ``delete``.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    sheet : str, optional
+        Source sheet for ``create``. Uses active sheet when omitted.
+    source : str, optional
+        Data source for ``create`` / ``set_source``: range address
+        (``"A1:C10"``), table name, or pivot table name.
+    chart_type : str, optional
+        Chart type for ``create``. Common values: ``column``, ``bar``,
+        ``line``, ``pie``, ``doughnut``, ``scatter``, ``area``,
+        ``combo_column_line``. Full list in domain docstring.
+    position : str, optional
+        Anchor cell for chart top-left corner (e.g. ``"E2"``).
+    width : float, optional
+        Chart width in points. Default 375.
+    height : float, optional
+        Chart height in points. Default 225.
+    title : str, optional
+        Chart title for ``create`` / ``configure``.
+    dest_sheet : str, optional
+        Sheet to embed chart on (``create``). Defaults to same sheet as source.
+    x_title : str, optional
+        Category (X) axis title for ``configure``.
+    y_title : str, optional
+        Value (Y) axis title for ``configure``.
+    legend : bool, optional
+        Show/hide legend for ``configure``.
+    legend_position : str, optional
+        Legend position: ``bottom``, ``corner``, ``left``, ``right``, ``top``.
+    data_labels : bool, optional
+        Show/hide data labels on all series for ``configure``.
+    series_names : list of str, optional
+        Override series names (in order) for ``configure``.
+    secondary_series : str, optional
+        Series name to move to secondary Y axis for ``configure`` (combo charts).
+    output_path : str, optional
+        File path for ``export_image``. Defaults to
+        ``%TEMP%/thepexcel_mcp/<chart_name>.png``.
+
+    Actions
+    -------
+    list
+        All charts: name, sheet, chart_type, source, position.
+        Example: ``excel_chart(action="list")``
+    create
+        Create a chart. Requires ``source`` and ``chart_type``.
+        Example: ``excel_chart(action="create", source="A1:C10",
+        chart_type="column", title="Sales")``
+    configure
+        Update title, axis labels, legend, data labels, series names.
+        Requires ``name``. Pass only parameters to change.
+        Example: ``excel_chart(action="configure", name="Chart 1",
+        title="Updated Title", legend=True, legend_position="bottom")``
+    set_source
+        Change data range. Requires ``name`` and ``source``.
+        Example: ``excel_chart(action="set_source", name="Chart 1",
+        source="A1:D20")``
+    export_image
+        Export chart as PNG. Requires ``name``. Returns file path.
+        Example: ``excel_chart(action="export_image", name="Chart 1")``
+    delete
+        Delete chart. Requires ``name``.
+        Example: ``excel_chart(action="delete", name="Chart 1")``
+    """
+    return chart_action(
+        action,
+        name=name,
+        workbook=workbook,
+        sheet=sheet,
+        source=source,
+        chart_type=chart_type,
+        position=position,
+        width=width,
+        height=height,
+        title=title,
+        dest_sheet=dest_sheet,
+        x_title=x_title,
+        y_title=y_title,
+        legend=legend,
+        legend_position=legend_position,
+        data_labels=data_labels,
+        series_names=series_names,
+        secondary_series=secondary_series,
+        output_path=output_path,
+    )
+
+
+@mcp.tool()
+def excel_screenshot(
+    action: str,
+    range: str | None = None,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    output_path: str | None = None,
+    name: str | None = None,
+) -> dict:
+    """Capture a region of the live Excel workbook as a PNG for visual verification.
+
+    Primary use: let an AI agent visually verify what Excel looks like after
+    writing data, creating charts, or applying formatting.
+
+    Requires Excel to be visible (not minimized). On HiDPI screens the bitmap
+    captures at screen resolution; output size scales with DPI.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``range``, ``sheet``, ``chart``.
+    range : str, optional
+        Range address for ``range`` action (e.g. ``"A1:F20"``).
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted (``range`` / ``sheet``).
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    output_path : str, optional
+        Save path. Defaults to ``%TEMP%/thepexcel_mcp/<timestamp>.png``.
+    name : str, optional
+        Chart name for ``chart`` action.
+
+    Actions
+    -------
+    range
+        Capture a cell range as PNG. Requires ``range``.
+        Uses Range.CopyPicture (bitmap mode) -> PIL clipboard grab -> PNG.
+        Example: ``excel_screenshot(action="range", range="A1:F20")``
+    sheet
+        Capture the used range of a sheet.
+        Example: ``excel_screenshot(action="sheet", sheet="Summary")``
+    chart
+        Export a chart as PNG by name. Requires ``name``.
+        Uses Chart.Export (no clipboard involved).
+        Example: ``excel_screenshot(action="chart", name="Sales Chart")``
+    """
+    return screenshot_action(
+        action,
+        range=range,
+        sheet=sheet,
+        workbook=workbook,
+        output_path=output_path,
+        name=name,
     )
 
 
