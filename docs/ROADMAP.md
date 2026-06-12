@@ -44,7 +44,7 @@ The VBA + Power Query + Data Model cluster requires desktop COM — no cloud com
 - **P1 ✅** `excel_table` (11 actions) + `excel_pivot` (9 actions)
 - **P2 ✅** `excel_datamodel` (11 actions) + `load_to_datamodel`
 - **P3 ✅** STA worker-thread hardening · `excel_vba` · LAMBDA/named formulas (`excel_name`) + spill introspection (`read_spill`, spill metadata in `read`)
-- **P4** `excel_chart` · `excel_screenshot` (visual verification loop) · `=PY()` write-only action
+- **P4 ✅** `excel_chart` (list/create/configure/set_source/export_image/delete) · `excel_screenshot` (range/sheet/chart → PNG, CopyPicture+PIL) · `excel_range(action="write_py")` (`=PY()` Formula2R1C1 insertion, experimental)
 - **P5** Live end-to-end smoke vs real Excel · packaging (uvx + MCPB bundle for Claude Desktop) · client registration
 - **Later** Companion SKILL (Excel best practices: when to use Table vs Model, M patterns, DAX patterns) — separate from tools; snapshot/undo + excel_diff (pattern from lingfan36/ai-office-mcp); progressive-disclosure meta-tool if tool context grows
 
