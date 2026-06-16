@@ -36,3 +36,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Scratch / generated artifacts
+tmp/
+samples/*.xlsx
