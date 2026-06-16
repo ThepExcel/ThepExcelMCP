@@ -49,6 +49,9 @@ def range_action(
     write
         Write a 2-D list of values via ``Range.Value``.
         ``values`` must be a list-of-lists (rows × columns).
+        The target range is auto-resized to the data shape, so callers may
+        pass just the top-left anchor cell (e.g. ``"A1"``) and the full block
+        will be written correctly.
     write_formula
         Write a formula string via ``Range.Formula2`` to the top-left cell.
         Excel spills dynamic array results automatically.
@@ -312,12 +315,18 @@ def _write(
     workbook: str | None,
     values: list,
 ) -> dict:
+    if not values:
+        raise ToolError("write requires a non-empty 2-D list of values.")
+    rows = len(values)
+    cols = max((len(r) if isinstance(r, (list, tuple)) else 1) for r in values)
     rng = _resolve_range(range_str, sheet, workbook)
     try:
-        rng.Value = values
-        rows = len(values)
-        cols = len(values[0]) if values else 0
-        return {"written": {"rows": rows, "cols": cols, "range": range_str}}
+        # Anchor at the top-left cell and resize to the data shape so that a
+        # single-cell anchor (e.g. "A1") expands to the full block. This is
+        # idempotent when the caller already passes a correctly-sized range.
+        target = rng.Cells(1, 1).Resize(rows, cols)
+        target.Value = values
+        return {"written": {"rows": rows, "cols": cols, "range": target.Address}}
     except Exception as e:
         raise _session.wrap(e, "Write failed")
 
