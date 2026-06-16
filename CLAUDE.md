@@ -1,3 +1,8 @@
+---
+purpose: |
+  Let me control Excel with AI without limits — going far beyond Copilot, Claude-in-Excel or any official tool — so the Excel work behind my teaching and projects has no ceiling, and I stay the person known for mastering Excel more deeply than anyone.
+---
+
 # CLAUDE.md — ThepExcelMCP
 
 > Windows-only MCP server. Controls live Excel Desktop via COM (pywin32).
