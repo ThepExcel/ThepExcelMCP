@@ -125,3 +125,10 @@ claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMC
 ## Future phases
 
 - **Phase 5:** Live end-to-end smoke vs real Excel · packaging (uvx + MCPB bundle for Claude Desktop) · client registration
+
+## Session Knowledge (durable facts — tools, paths, gotchas)
+> Auto-maintained by /session-handoff. Reusable facts only — NOT session status.
+
+- **2026-06-23 — Editable install ≠ hot reload.** `claude mcp add` runs an editable install, but the *running* stdio server keeps OLD code in memory after you edit a domain/server file. To test code changes THROUGH the live MCP tools you must **restart the MCP server** (Excel COM state survives; the Python process doesn't reload). pytest + `tests/smoke_com.py` validate code WITHOUT a restart (own Excel via AUTOLAUNCH), so use those for fast iteration; restart only to verify the MCP tool surface itself.
+- **2026-06-23 — `excel_datamodel(add_table)` / `powerquery(load_to_datamodel)` DEADLOCK the STA COM worker** in the Claude Code stdio context — bricks ALL subsequent calls until Excel is force-killed (not a recoverable timeout). Fallback = `load_to_table` → pivot-from-table. (Also captured in the excel-god skill.)
+- **2026-06-23 — Verify EFFECT, not the success report.** Several tools returned `success` while silently doing nothing (multi-cell write wrote 1 cell; table sort was a no-op). Always read-back the actual cell/format/file after a mutating call. Root cause of the write bug: pywin32 `.Resize(r,c)` returns a single offset cell (Count=1) → use `Range(Cells, Cells)` instead.
