@@ -87,6 +87,10 @@ try:
     from thepexcel_mcp.domains.names      import name_action
     from thepexcel_mcp.domains.vba        import vba_action
     from thepexcel_mcp.domains.format     import format_action
+    from thepexcel_mcp.domains.conditional_format import conditional_format_action
+    from thepexcel_mcp.domains.view       import view_action
+    from thepexcel_mcp.domains.validation import validation_action
+    from thepexcel_mcp.domains.slicer     import slicer_action
 except ImportError as e:
     print(f"Import failed: {e}")
     sys.exit(1)
@@ -1357,6 +1361,741 @@ def run_workbook_create_save_as() -> None:
                     pass
 
 
+# ── Section 13: Conditional Formatting ───────────────────────────────────────
+
+def run_conditional_format() -> None:
+    """Live read-back smoke for each CF action.
+
+    Read-back is the oracle the unit mocks cannot provide: we assert
+    FormatConditions.Count increased (rule was actually applied) and
+    check specific COM properties on the returned condition object.
+
+    xlDataBar type constant = 4, xlIconSet = 6, xlCellValue = 1, xlTop10 = 5
+    (XlFormatConditionType enum from Excel VBA object model).
+    """
+    section_header("SECTION 13 — Conditional Formatting (read-back oracle)")
+    if _check_excel_busy(
+        "cf.cell_rule", "cf.cell_rule_color", "cf.data_bar",
+        "cf.data_bar_color", "cf.color_scale", "cf.icon_set",
+        "cf.top_bottom", "cf.clear",
+    ):
+        return
+
+    # xlFormatConditionType enum values
+    XL_CELL_VALUE = 1
+    XL_TOP10      = 5
+    XL_DATA_BAR   = 4
+    XL_ICON_SET   = 6
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        def _write():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1:A10").Value = [[i * 10] for i in range(1, 11)]
+        _session.run_com(_write)
+
+        # ── cell_rule: greater than 50, fill yellow ──────────────────────────
+        try:
+            conditional_format_action(
+                "cell_rule", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+                operator="greater", formula1="50", fill_color="#FFFF00",
+            )
+            def _check_cell_rule():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A10")
+                count = rng.FormatConditions.Count
+                if count < 1:
+                    return None, None, None
+                cond = rng.FormatConditions(1)
+                return count, cond.Type, cond.Interior.Color
+            count, ctype, fill_bgr = _session.run_com(_check_cell_rule)
+            assert count >= 1, f"FormatConditions.Count expected >=1, got {count}"
+            assert ctype == XL_CELL_VALUE, f"Type expected {XL_CELL_VALUE} (xlCellValue), got {ctype}"
+            # Yellow #FFFF00 → BGR = (0<<16)|(255<<8)|255 = 65535
+            assert fill_bgr == 65535, f"Interior.Color expected 65535 (yellow), got {fill_bgr}"
+            record("cf.cell_rule", "PASS",
+                   f"Count={count} Type={ctype} Interior.Color={fill_bgr}")
+        except Exception as e:
+            record("cf.cell_rule", "FAIL", str(e))
+
+        # ── cell_rule font_color (separate range to avoid count confusion) ───
+        try:
+            conditional_format_action(
+                "cell_rule", range="A1:A5", sheet="Sheet1", workbook=wb_name,
+                operator="less", formula1="30", font_color="#FF0000",
+            )
+            def _check_font_color():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A5")
+                # Grab the last-added rule (highest index)
+                count = rng.FormatConditions.Count
+                cond = rng.FormatConditions(count)
+                return cond.Font.Color
+            font_bgr = _session.run_com(_check_font_color)
+            # Red #FF0000 → BGR = 255
+            assert font_bgr == 255, f"Font.Color expected 255 (red BGR), got {font_bgr}"
+            record("cf.cell_rule_color", "PASS", f"Font.Color={font_bgr}")
+        except Exception as e:
+            record("cf.cell_rule_color", "FAIL", str(e))
+
+        # ── clear (wipe A1:A5 before data_bar so counts are predictable) ────
+        try:
+            conditional_format_action(
+                "clear", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+            )
+            def _check_clear():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1:A10").FormatConditions.Count
+            count_after = _session.run_com(_check_clear)
+            assert count_after == 0, f"After clear, Count expected 0, got {count_after}"
+            record("cf.clear", "PASS", f"Count after clear={count_after}")
+        except Exception as e:
+            record("cf.clear", "FAIL", str(e))
+
+        # ── data_bar (no color) ──────────────────────────────────────────────
+        try:
+            conditional_format_action(
+                "data_bar", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+            )
+            def _check_data_bar():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A10")
+                count = rng.FormatConditions.Count
+                if count < 1:
+                    return None, None
+                cond = rng.FormatConditions(1)
+                return count, cond.Type
+            count, ctype = _session.run_com(_check_data_bar)
+            assert count >= 1, f"FormatConditions.Count expected >=1, got {count}"
+            assert ctype == XL_DATA_BAR, (
+                f"Type expected {XL_DATA_BAR} (xlDataBar), got {ctype}"
+            )
+            record("cf.data_bar", "PASS", f"Count={count} Type={ctype}")
+        except Exception as e:
+            record("cf.data_bar", "FAIL", str(e))
+
+        # ── data_bar with color ──────────────────────────────────────────────
+        try:
+            conditional_format_action(
+                "data_bar", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+                color="#0070C0",
+            )
+            def _check_data_bar_color():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A10")
+                count = rng.FormatConditions.Count
+                cond = rng.FormatConditions(count)  # last added
+                return count, cond.Type, cond.BarColor.Color
+            count, ctype, bar_bgr = _session.run_com(_check_data_bar_color)
+            assert ctype == XL_DATA_BAR, f"Type expected {XL_DATA_BAR}, got {ctype}"
+            # #0070C0 → R=0x00, G=0x70=112, B=0xC0=192 → BGR=(192<<16)|(112<<8)|0 = 12607488
+            expected_bar_bgr = (0xC0 << 16) | (0x70 << 8) | 0x00
+            assert bar_bgr == expected_bar_bgr, (
+                f"BarColor.Color expected {expected_bar_bgr} (#0070C0 BGR), got {bar_bgr}"
+            )
+            record("cf.data_bar_color", "PASS",
+                   f"Count={count} BarColor.Color={bar_bgr}")
+        except Exception as e:
+            record("cf.data_bar_color", "FAIL", str(e))
+
+        # ── clear before color_scale / icon_set ─────────────────────────────
+        def _do_clear():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1:A10").FormatConditions.Delete()
+        _session.run_com(_do_clear)
+
+        # ── color_scale (3-color) ────────────────────────────────────────────
+        try:
+            conditional_format_action(
+                "color_scale", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+                scale_type=3,
+            )
+            def _check_color_scale():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A10")
+                count = rng.FormatConditions.Count
+                if count < 1:
+                    return None, None, None
+                cond = rng.FormatConditions(1)
+                # ColorScale has ColorScaleCriteria collection (len=2 or 3)
+                return count, cond.Type, len(cond.ColorScaleCriteria)
+            count, ctype, criteria_len = _session.run_com(_check_color_scale)
+            assert count >= 1, f"Count expected >=1, got {count}"
+            # xlColorScale type = 3
+            assert ctype == 3, f"Type expected 3 (xlColorScale), got {ctype}"
+            assert criteria_len == 3, f"ColorScaleCriteria expected 3, got {criteria_len}"
+            record("cf.color_scale", "PASS",
+                   f"Count={count} Type={ctype} Criteria={criteria_len}")
+        except Exception as e:
+            record("cf.color_scale", "FAIL", str(e))
+
+        # ── clear before icon_set ────────────────────────────────────────────
+        _session.run_com(_do_clear)
+
+        # ── icon_set ─────────────────────────────────────────────────────────
+        try:
+            conditional_format_action(
+                "icon_set", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+                style="3traffic_lights",
+            )
+            def _check_icon_set():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A10")
+                count = rng.FormatConditions.Count
+                if count < 1:
+                    return None, None, None
+                cond = rng.FormatConditions(1)
+                return count, cond.Type, cond.IconSet.Count
+            count, ctype, icon_count = _session.run_com(_check_icon_set)
+            assert count >= 1, f"Count expected >=1, got {count}"
+            assert ctype == XL_ICON_SET, (
+                f"Type expected {XL_ICON_SET} (xlIconSet), got {ctype}"
+            )
+            assert icon_count == 3, (
+                f"IconSet.Count expected 3 (3 traffic lights), got {icon_count}"
+            )
+            record("cf.icon_set", "PASS",
+                   f"Count={count} Type={ctype} IconSet.Count={icon_count}")
+        except Exception as e:
+            record("cf.icon_set", "FAIL", str(e))
+
+        # ── clear before top_bottom ──────────────────────────────────────────
+        _session.run_com(_do_clear)
+
+        # ── top_bottom ───────────────────────────────────────────────────────
+        try:
+            conditional_format_action(
+                "top_bottom", range="A1:A10", sheet="Sheet1", workbook=wb_name,
+                kind="top", rank=3, percent=False, fill_color="#00B050",
+            )
+            def _check_top_bottom():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:A10")
+                count = rng.FormatConditions.Count
+                if count < 1:
+                    return None, None, None, None, None
+                cond = rng.FormatConditions(1)
+                return count, cond.Type, cond.TopBottom, cond.Rank, cond.Interior.Color
+            count, ctype, top_bottom_val, rank_val, fill_bgr = _session.run_com(
+                _check_top_bottom
+            )
+            assert count >= 1, f"Count expected >=1, got {count}"
+            assert ctype == XL_TOP10, (
+                f"Type expected {XL_TOP10} (xlTop10), got {ctype}"
+            )
+            assert top_bottom_val == 1, (
+                f"TopBottom expected 1 (xlTop10Top), got {top_bottom_val}"
+            )
+            assert rank_val == 3, f"Rank expected 3, got {rank_val}"
+            # Green #00B050 → R=0, G=0xB0=176, B=0x50=80 → BGR=(80<<16)|(176<<8)|0 = 5285888
+            expected_fill = (0x50 << 16) | (0xB0 << 8) | 0x00
+            assert fill_bgr == expected_fill, (
+                f"Interior.Color expected {expected_fill} (#00B050 BGR), got {fill_bgr}"
+            )
+            record("cf.top_bottom", "PASS",
+                   f"Count={count} Type={ctype} Rank={rank_val} Color={fill_bgr}")
+        except Exception as e:
+            record("cf.top_bottom", "FAIL", str(e))
+
+    except Exception as e:
+        record("section13.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 14: View (freeze / gridlines / zoom / headings) ───────────────────
+
+def run_view() -> None:
+    """Live read-back smoke for each view action.
+
+    Critical regression guard: the multi-workbook test verifies that
+    view mutations land on the TARGET workbook window (wb.Windows(1)),
+    NOT on the foreground workbook (app.ActiveWindow).  This proves the
+    fix vs the original ActiveWindow bug.
+    """
+    section_header("SECTION 14 — View (freeze_panes / unfreeze_panes / gridlines / zoom / headings)")
+    if _check_excel_busy(
+        "view.freeze_panes", "view.unfreeze_panes",
+        "view.gridlines", "view.zoom", "view.headings",
+        "view.multi_workbook_isolation",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    wb2 = None
+    wb2_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── freeze_panes: cell="B2" (freeze row 1 + col A) ─────────────────
+        try:
+            view_action("freeze_panes", sheet="Sheet1", workbook=wb_name, cell="B2")
+
+            def _check_freeze():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                wb_inner = ws.Parent
+                win = wb_inner.Windows(1)
+                return win.SplitRow, win.SplitColumn, win.FreezePanes
+
+            split_row, split_col, frozen = _session.run_com(_check_freeze)
+            assert split_row == 1, f"SplitRow expected 1, got {split_row}"
+            assert split_col == 1, f"SplitColumn expected 1, got {split_col}"
+            assert frozen is True, f"FreezePanes expected True, got {frozen}"
+            record("view.freeze_panes", "PASS",
+                   f"SplitRow={split_row} SplitColumn={split_col} FreezePanes={frozen}")
+        except Exception as e:
+            record("view.freeze_panes", "FAIL", str(e))
+
+        # ── unfreeze_panes ──────────────────────────────────────────────────
+        try:
+            view_action("unfreeze_panes", sheet="Sheet1", workbook=wb_name)
+
+            def _check_unfreeze():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                win = ws.Parent.Windows(1)
+                return win.FreezePanes
+
+            frozen_after = _session.run_com(_check_unfreeze)
+            assert frozen_after is False, f"FreezePanes expected False after unfreeze, got {frozen_after}"
+            record("view.unfreeze_panes", "PASS", f"FreezePanes={frozen_after}")
+        except Exception as e:
+            record("view.unfreeze_panes", "FAIL", str(e))
+
+        # ── gridlines: hide then show ────────────────────────────────────────
+        try:
+            view_action("gridlines", sheet="Sheet1", workbook=wb_name, show=False)
+
+            def _check_gridlines():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Parent.Windows(1).DisplayGridlines
+
+            gl = _session.run_com(_check_gridlines)
+            assert gl is False, f"DisplayGridlines expected False, got {gl}"
+
+            view_action("gridlines", sheet="Sheet1", workbook=wb_name, show=True)
+            gl2 = _session.run_com(_check_gridlines)
+            assert gl2 is True, f"DisplayGridlines expected True after re-enable, got {gl2}"
+            record("view.gridlines", "PASS", f"hide={not gl} → show={gl2}")
+        except Exception as e:
+            record("view.gridlines", "FAIL", str(e))
+
+        # ── zoom ─────────────────────────────────────────────────────────────
+        try:
+            view_action("zoom", sheet="Sheet1", workbook=wb_name, zoom=75)
+
+            def _check_zoom():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Parent.Windows(1).Zoom
+
+            z = _session.run_com(_check_zoom)
+            assert z == 75, f"Zoom expected 75, got {z}"
+            record("view.zoom", "PASS", f"Zoom={z}")
+        except Exception as e:
+            record("view.zoom", "FAIL", str(e))
+
+        # ── headings: hide then show ─────────────────────────────────────────
+        try:
+            view_action("headings", sheet="Sheet1", workbook=wb_name, show=False)
+
+            def _check_headings():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Parent.Windows(1).DisplayHeadings
+
+            h = _session.run_com(_check_headings)
+            assert h is False, f"DisplayHeadings expected False, got {h}"
+
+            view_action("headings", sheet="Sheet1", workbook=wb_name, show=True)
+            h2 = _session.run_com(_check_headings)
+            assert h2 is True, f"DisplayHeadings expected True after re-enable, got {h2}"
+            record("view.headings", "PASS", f"hide={not h} → show={h2}")
+        except Exception as e:
+            record("view.headings", "FAIL", str(e))
+
+        # ── MULTI-WORKBOOK ISOLATION (regression guard for ActiveWindow bug) ─
+        # Create a SECOND workbook so it becomes the foreground window.
+        # Then mutate view properties targeting the BACKGROUND wb, and assert:
+        #   (a) the target wb changed as expected
+        #   (b) the foreground wb did NOT change (isolation proof)
+        try:
+            wb2, wb2_name = _new_wb()  # wb2 is now the foreground (ActiveWindow)
+
+            # Apply freeze to the BACKGROUND target workbook
+            view_action("freeze_panes", sheet="Sheet1", workbook=wb_name, cell="B2")
+            view_action("zoom", sheet="Sheet1", workbook=wb_name, zoom=85)
+
+            def _check_multi_wb():
+                # Target workbook window
+                ws_target = _session.get_sheet("Sheet1", wb_name)
+                win_target = ws_target.Parent.Windows(1)
+                target_frozen = win_target.FreezePanes
+                target_zoom = win_target.Zoom
+
+                # Foreground workbook window
+                ws_fg = _session.get_sheet("Sheet1", wb2_name)
+                win_fg = ws_fg.Parent.Windows(1)
+                fg_frozen = win_fg.FreezePanes
+                fg_zoom = win_fg.Zoom
+
+                return target_frozen, target_zoom, fg_frozen, fg_zoom
+
+            tgt_frozen, tgt_zoom, fg_frozen, fg_zoom = _session.run_com(_check_multi_wb)
+
+            assert tgt_frozen is True, (
+                f"TARGET wb FreezePanes expected True, got {tgt_frozen}  "
+                f"(proves wb.Windows(1) targets the right workbook)"
+            )
+            assert tgt_zoom == 85, f"TARGET wb Zoom expected 85, got {tgt_zoom}"
+            assert fg_frozen is False, (
+                f"FOREGROUND wb FreezePanes expected False (unchanged), got {fg_frozen}  "
+                f"(proves no cross-workbook mutation)"
+            )
+            # Foreground zoom should be its default (100), NOT 85
+            assert fg_zoom != 85, (
+                f"FOREGROUND wb Zoom should NOT be 85 — mutation leaked to wrong window"
+            )
+            record(
+                "view.multi_workbook_isolation", "PASS",
+                f"target_frozen={tgt_frozen} target_zoom={tgt_zoom} "
+                f"fg_frozen={fg_frozen} fg_zoom={fg_zoom}",
+            )
+        except Exception as e:
+            record("view.multi_workbook_isolation", "FAIL", str(e))
+
+    except Exception as e:
+        record("section14.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        # Close the second workbook first (it's foreground)
+        if wb2 is not None:
+            _close_wb(wb2, wb2_name or "unknown")
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 15: Data Validation ───────────────────────────────────────────────
+
+def run_validation() -> None:
+    """Live read-back smoke for each validation action.
+
+    Critical regression guards:
+    - Delete-before-Add: apply a second validation OVER an existing one must
+      NOT raise COM error 1004 (proves rng.Validation.Delete() runs first).
+    - After clear, rng.Validation.Type must equal xlValidateInputOnly=0.
+    """
+    section_header("SECTION 15 — Data Validation (list / whole_number / custom / clear / re-apply)")
+    if _check_excel_busy(
+        "validation.list", "validation.whole_number",
+        "validation.custom", "validation.clear", "validation.re_apply",
+    ):
+        return
+
+    # XlDVType enum constants
+    XL_VALIDATE_INPUT_ONLY  = 0   # no validation (cleared state)
+    XL_VALIDATE_WHOLE_NUMBER = 1
+    XL_VALIDATE_LIST        = 3
+    XL_VALIDATE_CUSTOM      = 7
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── list validation ──────────────────────────────────────────────────
+        try:
+            validation_action(
+                "list", range="A1:A5", sheet="Sheet1", workbook=wb_name,
+                formula1="Yes,No,Maybe",
+            )
+
+            def _check_list():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                v = ws.Range("A1").Validation
+                return v.Type, v.Formula1
+
+            v_type, v_formula1 = _session.run_com(_check_list)
+            assert v_type == XL_VALIDATE_LIST, (
+                f"Validation.Type expected {XL_VALIDATE_LIST} (xlValidateList), got {v_type}"
+            )
+            # Formula1 may be wrapped in quotes by Excel; check the values are present
+            assert "Yes" in v_formula1, (
+                f"Validation.Formula1 expected to contain 'Yes', got {v_formula1!r}"
+            )
+            record("validation.list", "PASS",
+                   f"Type={v_type} Formula1={v_formula1!r}")
+        except Exception as e:
+            record("validation.list", "FAIL", str(e))
+
+        # ── whole_number with operator=between ───────────────────────────────
+        try:
+            validation_action(
+                "whole_number", range="B1:B5", sheet="Sheet1", workbook=wb_name,
+                formula1="1", formula2="100", operator="between",
+            )
+
+            def _check_whole():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                v = ws.Range("B1").Validation
+                return v.Type, v.Operator, v.Formula1, v.Formula2
+
+            v_type, v_op, v_f1, v_f2 = _session.run_com(_check_whole)
+            assert v_type == XL_VALIDATE_WHOLE_NUMBER, (
+                f"Validation.Type expected {XL_VALIDATE_WHOLE_NUMBER}, got {v_type}"
+            )
+            assert v_op == 1, f"Validation.Operator expected 1 (xlBetween), got {v_op}"
+            assert "1" in v_f1, f"Formula1 expected '1', got {v_f1!r}"
+            assert "100" in v_f2, f"Formula2 expected '100', got {v_f2!r}"
+            record("validation.whole_number", "PASS",
+                   f"Type={v_type} Operator={v_op} F1={v_f1!r} F2={v_f2!r}")
+        except Exception as e:
+            record("validation.whole_number", "FAIL", str(e))
+
+        # ── custom formula validation ────────────────────────────────────────
+        try:
+            validation_action(
+                "custom", range="C1:C5", sheet="Sheet1", workbook=wb_name,
+                formula1="=ISNUMBER(C1)",
+            )
+
+            def _check_custom():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                v = ws.Range("C1").Validation
+                return v.Type, v.Formula1
+
+            v_type, v_formula1 = _session.run_com(_check_custom)
+            assert v_type == XL_VALIDATE_CUSTOM, (
+                f"Validation.Type expected {XL_VALIDATE_CUSTOM} (xlValidateCustom), got {v_type}"
+            )
+            assert "ISNUMBER" in v_formula1.upper(), (
+                f"Formula1 expected ISNUMBER formula, got {v_formula1!r}"
+            )
+            record("validation.custom", "PASS",
+                   f"Type={v_type} Formula1={v_formula1!r}")
+        except Exception as e:
+            record("validation.custom", "FAIL", str(e))
+
+        # ── clear (removes validation; Type should become 0) ─────────────────
+        try:
+            validation_action(
+                "clear", range="A1:A5", sheet="Sheet1", workbook=wb_name,
+            )
+
+            def _check_clear():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                try:
+                    v_type = ws.Range("A1").Validation.Type
+                except Exception:
+                    # Some Excel versions raise COMError after Delete — treat as cleared
+                    v_type = XL_VALIDATE_INPUT_ONLY
+                return v_type
+
+            v_type_after = _session.run_com(_check_clear)
+            assert v_type_after == XL_VALIDATE_INPUT_ONLY, (
+                f"After clear, Validation.Type expected 0 (xlValidateInputOnly), got {v_type_after}"
+            )
+            record("validation.clear", "PASS", f"Type after clear={v_type_after}")
+        except Exception as e:
+            record("validation.clear", "FAIL", str(e))
+
+        # ── re-apply validation over an existing one (Delete-before-Add guard) ──
+        # Apply list validation to D1:D5 first, then overwrite with a different list.
+        # Must NOT raise COM error 1004.
+        try:
+            validation_action(
+                "list", range="D1:D5", sheet="Sheet1", workbook=wb_name,
+                formula1="Red,Green,Blue",
+            )
+            # Now apply again (overwrite) — this is the 1004-regression test
+            validation_action(
+                "list", range="D1:D5", sheet="Sheet1", workbook=wb_name,
+                formula1="Alpha,Beta,Gamma",
+            )
+
+            def _check_reapply():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                v = ws.Range("D1").Validation
+                return v.Type, v.Formula1
+
+            v_type, v_f1 = _session.run_com(_check_reapply)
+            assert v_type == XL_VALIDATE_LIST, (
+                f"Re-apply: Type expected {XL_VALIDATE_LIST}, got {v_type}"
+            )
+            assert "Alpha" in v_f1, (
+                f"Re-apply: Formula1 expected 'Alpha,...', got {v_f1!r}"
+            )
+            record("validation.re_apply", "PASS",
+                   f"Type={v_type} Formula1={v_f1!r} — no 1004 error (Delete-before-Add confirmed)")
+        except Exception as e:
+            record("validation.re_apply", "FAIL", str(e))
+
+    except Exception as e:
+        record("section15.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 16: Slicer ────────────────────────────────────────────────────────
+
+def run_slicer() -> None:
+    """Live read-back smoke for slicer add / list / delete on a Table source.
+
+    Critical regression guard: assert the slicer's actual Top/Left/Width/Height
+    match the requested values.  The historical bug was a wrong positional-arg
+    layout in Slicers.Add that shifted Caption/Top/Left/Width/Height by one slot
+    — the slicer appeared at a different position than requested.
+
+    Timeline (add_timeline) requires a date-typed PivotTable field; that setup
+    is complex and fragile in automation, so we SKIP it with a clear note.
+    """
+    section_header("SECTION 16 — Slicer (add / list / delete on Table source; position read-back)")
+    if _check_excel_busy(
+        "slicer.add", "slicer.list", "slicer.delete",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # Build a Table with a Category column so we have a slicer source
+        def _setup_table():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1:B1").Value = [["Category", "Value"]]
+            ws.Range("A2:B5").Value = [
+                ["Fruit",  10],
+                ["Veggie", 20],
+                ["Fruit",  30],
+                ["Veggie", 40],
+            ]
+            # Create a ListObject (Table) named "SlicerSource"
+            lo = ws.ListObjects.Add(
+                1,                     # xlSrcRange
+                ws.Range("A1:B5"),
+                None,
+                1,                     # xlYes (header row)
+            )
+            lo.Name = "SlicerSource"
+            return lo.Name
+
+        tbl_name = _session.run_com(_setup_table)
+        assert tbl_name == "SlicerSource", f"Expected table 'SlicerSource', got {tbl_name!r}"
+
+        # ── add slicer (position read-back regression test) ─────────────────
+        REQ_TOP    = 60.0
+        REQ_LEFT   = 80.0
+        REQ_WIDTH  = 150.0
+        REQ_HEIGHT = 160.0
+        sc_name = None
+        sl_name = None
+
+        try:
+            result = slicer_action(
+                "add",
+                workbook=wb_name,
+                source="SlicerSource",
+                field="Category",
+                sheet="Sheet1",
+                caption="Category Filter",
+                top=REQ_TOP,
+                left=REQ_LEFT,
+                width=REQ_WIDTH,
+                height=REQ_HEIGHT,
+            )
+            sc_name = result.get("slicer_cache")
+            sl_name = result.get("slicer_name")
+
+            # Read back actual slicer position from COM
+            def _check_slicer_pos():
+                wb_inner = _session.get_workbook(wb_name)
+                # Navigate: SlicerCache → Slicers(1) → position properties
+                sc = wb_inner.SlicerCaches(sc_name)
+                sl = sc.Slicers(1)
+                return sl.Top, sl.Left, sl.Width, sl.Height, sl.Caption
+
+            act_top, act_left, act_width, act_height, act_caption = (
+                _session.run_com(_check_slicer_pos)
+            )
+            TOL = 2.0  # Excel may round to nearest point
+            assert abs(act_top    - REQ_TOP)    < TOL, (
+                f"Slicer.Top expected ~{REQ_TOP}, got {act_top}  "
+                f"(off-by-one arg bug would shift this)"
+            )
+            assert abs(act_left   - REQ_LEFT)   < TOL, (
+                f"Slicer.Left expected ~{REQ_LEFT}, got {act_left}"
+            )
+            assert abs(act_width  - REQ_WIDTH)  < TOL, (
+                f"Slicer.Width expected ~{REQ_WIDTH}, got {act_width}"
+            )
+            assert abs(act_height - REQ_HEIGHT) < TOL, (
+                f"Slicer.Height expected ~{REQ_HEIGHT}, got {act_height}"
+            )
+            assert act_caption == "Category Filter", (
+                f"Slicer.Caption expected 'Category Filter', got {act_caption!r}"
+            )
+            record(
+                "slicer.add", "PASS",
+                f"cache={sc_name} name={sl_name} "
+                f"top={act_top} left={act_left} width={act_width} height={act_height} "
+                f"caption={act_caption!r}",
+            )
+        except Exception as e:
+            record("slicer.add", "FAIL", str(e))
+
+        # ── list (slicer cache should appear) ────────────────────────────────
+        try:
+            list_result = slicer_action("list", workbook=wb_name)
+            caches = list_result.get("slicer_caches", [])
+            count = list_result.get("count", 0)
+            assert count >= 1, f"Expected >=1 slicer cache, got {count}"
+            cache_names = [c["name"] for c in caches]
+            if sc_name:
+                assert sc_name in cache_names, (
+                    f"Expected slicer cache '{sc_name}' in list, got {cache_names}"
+                )
+            record("slicer.list", "PASS",
+                   f"count={count} caches={cache_names}")
+        except Exception as e:
+            record("slicer.list", "FAIL", str(e))
+
+        # ── delete ────────────────────────────────────────────────────────────
+        try:
+            if sc_name is None:
+                raise AssertionError("Cannot test delete — slicer_cache name unknown (add failed)")
+            slicer_action("delete", workbook=wb_name, slicer=sc_name)
+
+            # Confirm cache is gone
+            def _check_deleted():
+                wb_inner = _session.get_workbook(wb_name)
+                return wb_inner.SlicerCaches.Count
+
+            count_after = _session.run_com(_check_deleted)
+            assert count_after == 0, (
+                f"After delete, SlicerCaches.Count expected 0, got {count_after}"
+            )
+            record("slicer.delete", "PASS", f"SlicerCaches.Count={count_after}")
+        except Exception as e:
+            record("slicer.delete", "FAIL", str(e))
+
+        # ── add_timeline: SKIP (requires date PivotTable field — complex setup) ──
+        record(
+            "slicer.add_timeline", "SKIP",
+            "Requires a PivotTable with a date-typed field; "
+            "Table-based timeline is not supported by xlTimeline cache type. "
+            "Covered separately when a PivotTable fixture is available.",
+        )
+
+    except Exception as e:
+        record("section16.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
@@ -1385,6 +2124,10 @@ _ALL_SECTIONS = {
     "10": run_write_py,
     "11": run_format,
     "12": run_workbook_create_save_as,
+    "13": run_conditional_format,
+    "14": run_view,
+    "15": run_validation,
+    "16": run_slicer,
 }
 
 

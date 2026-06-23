@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
 
 from .domains.charts import chart_action
+from .domains.conditional_format import conditional_format_action
 from .domains.datamodel import datamodel_action
 from .domains.format import format_action
 from .domains.names import name_action
@@ -18,8 +19,11 @@ from .domains.powerquery import powerquery_action
 from .domains.ranges import range_action
 from .domains.screenshot import screenshot_action
 from .domains.sheets import sheet_action
+from .domains.slicer import slicer_action
 from .domains.tables import table_action
+from .domains.validation import validation_action
 from .domains.vba import vba_action
+from .domains.view import view_action
 from .domains.workbook import workbook_action
 
 mcp = FastMCP(
@@ -1199,6 +1203,409 @@ def excel_format(
         height=height,
         autofit_columns=autofit_columns,
         autofit_rows=autofit_rows,
+    )
+
+
+@mcp.tool()
+def excel_view(
+    action: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    # freeze_panes
+    cell: str | None = None,
+    freeze_rows: int | None = None,
+    freeze_cols: int | None = None,
+    # gridlines / headings
+    show: bool | None = None,
+    # zoom
+    zoom: int | None = None,
+) -> dict:
+    """Control worksheet display settings: freeze panes, gridlines, zoom, headings.
+
+    All mutations target the workbook-scoped window (``wb.Windows(1)``), not
+    the global ``Application.ActiveWindow``, so results are correct even when
+    the target workbook is not the foreground workbook.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``freeze_panes``, ``unfreeze_panes``, ``gridlines``,
+        ``zoom``, ``headings``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    cell : str, optional
+        Anchor cell for ``freeze_panes`` (e.g. ``"B2"`` freezes row 1 and
+        column A). Overrides freeze_rows/freeze_cols when provided.
+    freeze_rows : int, optional
+        Number of rows to freeze from the top (``freeze_panes``).
+    freeze_cols : int, optional
+        Number of columns to freeze from the left (``freeze_panes``).
+    show : bool, optional
+        True = show, False = hide for ``gridlines`` and ``headings`` actions.
+    zoom : int, optional
+        Zoom percentage 10–400 for ``zoom`` action (e.g. 150 for 150%).
+
+    Actions
+    -------
+    freeze_panes
+        Freeze rows/columns. Supply ``cell="B2"`` (row 1 + col A frozen),
+        or ``freeze_rows=2``, ``freeze_cols=1`` directly.
+        Examples::
+
+            excel_view(action="freeze_panes", sheet="Sales", cell="B2")
+            excel_view(action="freeze_panes", workbook="Report.xlsx", freeze_rows=1)
+
+    unfreeze_panes
+        Remove any freeze from the target sheet's window.
+        Example::
+
+            excel_view(action="unfreeze_panes", sheet="Sheet1")
+
+    gridlines
+        Show or hide gridlines on the target sheet.
+        Examples::
+
+            excel_view(action="gridlines", show=False)   # hide
+            excel_view(action="gridlines", show=True)    # show
+
+    zoom
+        Set zoom level 10–400.
+        Examples::
+
+            excel_view(action="zoom", sheet="Dashboard", zoom=80)
+            excel_view(action="zoom", zoom=150)
+
+    headings
+        Show or hide row/column headings (the 1/2/3… A/B/C… labels).
+        Examples::
+
+            excel_view(action="headings", show=False)
+            excel_view(action="headings", sheet="Print", show=True)
+    """
+    return view_action(
+        action,
+        sheet=sheet,
+        workbook=workbook,
+        cell=cell,
+        freeze_rows=freeze_rows,
+        freeze_cols=freeze_cols,
+        show=show,
+        zoom=zoom,
+    )
+
+
+@mcp.tool()
+def excel_conditional_format(
+    action: str,
+    range: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    # data_bar
+    color: str | None = None,
+    # color_scale
+    scale_type: int = 3,
+    # icon_set
+    style: str = "3traffic_lights",
+    # cell_rule
+    operator: str | None = None,
+    formula1: str | None = None,
+    formula2: str | None = None,
+    fill_color: str | None = None,
+    font_color: str | None = None,
+    # top_bottom
+    kind: str = "top",
+    rank: int = 10,
+    percent: bool = False,
+) -> dict:
+    """Add or remove conditional formatting rules on an Excel range via COM.
+
+    Parameters
+    ----------
+    action : str
+        One of: cell_rule | data_bar | color_scale | icon_set | top_bottom | clear
+    range : str
+        Excel range address, e.g. "A1:D20" or "TableName[Column]".
+    sheet : str, optional
+        Sheet name. Defaults to the active sheet.
+    workbook : str, optional
+        Workbook name. Defaults to the active workbook.
+    color : str, optional
+        "#RRGGBB" bar color for data_bar.
+    scale_type : int, optional
+        2 (two-color) or 3 (three-color) for color_scale. Default 3.
+    style : str, optional
+        Icon-set style name for icon_set. Default "3traffic_lights".
+        Valid: 3arrows, 3arrows_gray, 3flags, 3traffic_lights, 3traffic_lights2,
+        3signs, 3symbols, 4arrows, 4arrows_gray, 4red_to_black, 4crv,
+        4traffic_lights, 5arrows, 5arrows_gray, 5crv, 5quarters.
+    operator : str, optional
+        Required for cell_rule. One of: between | not_between | equal | not_equal
+        | greater | less | greater_equal | less_equal.
+    formula1 : str, optional
+        Required for cell_rule — first threshold value (e.g. "100").
+    formula2 : str, optional
+        Required for cell_rule with operator=between or not_between.
+    fill_color : str, optional
+        "#RRGGBB" fill color for cell_rule or top_bottom.
+    font_color : str, optional
+        "#RRGGBB" font color for cell_rule.
+    kind : str, optional
+        "top" or "bottom" for top_bottom. Default "top".
+    rank : int, optional
+        N value for top_bottom (top/bottom N items). Default 10.
+    percent : bool, optional
+        If True, rank is a percentage (top/bottom N%). Default False.
+
+    Actions
+    -------
+    data_bar
+        Add a data-bar rule. Optionally set bar color via color="#RRGGBB".
+        Example: excel_conditional_format(action="data_bar", range="B2:B20",
+                                          color="#0070C0")
+    color_scale
+        Add a 2- or 3-color gradient scale.
+        Example: excel_conditional_format(action="color_scale", range="C2:C20",
+                                          scale_type=3)
+    icon_set
+        Add an icon-set rule (traffic lights, arrows, flags, …).
+        Example: excel_conditional_format(action="icon_set", range="D2:D20",
+                                          style="3arrows")
+    cell_rule
+        Add a cell-value conditional format with operator, threshold, and colors.
+        Example: excel_conditional_format(action="cell_rule", range="A2:A20",
+                                          operator="greater", formula1="1000",
+                                          fill_color="#FFFF00", font_color="#FF0000")
+    top_bottom
+        Highlight the top or bottom N cells (count or percent).
+        Example: excel_conditional_format(action="top_bottom", range="B2:B20",
+                                          kind="top", rank=5, percent=False,
+                                          fill_color="#00B050")
+    clear
+        Delete ALL conditional formatting rules on the range.
+        Example: excel_conditional_format(action="clear", range="A1:Z100")
+    """
+    return conditional_format_action(
+        action,
+        range=range,
+        sheet=sheet,
+        workbook=workbook,
+        color=color,
+        scale_type=scale_type,
+        style=style,
+        operator=operator,
+        formula1=formula1,
+        formula2=formula2,
+        fill_color=fill_color,
+        font_color=font_color,
+        kind=kind,
+        rank=rank,
+        percent=percent,
+    )
+
+
+@mcp.tool()
+def excel_validation(
+    action: str,
+    range: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    formula1: str | None = None,
+    formula2: str | None = None,
+    operator: str | None = None,
+    in_cell_dropdown: bool = True,
+    ignore_blank: bool = True,
+    show_error: bool = True,
+) -> dict:
+    """Add or remove data validation on an Excel range.
+
+    Always deletes any existing validation before adding new rules (required by
+    Excel COM — adding over existing validation raises error 1004).
+
+    Parameters
+    ----------
+    action : str
+        One of: ``list``, ``whole_number``, ``decimal``, ``date``,
+        ``text_length``, ``custom``, ``clear``.
+    range : str
+        Range address: ``"B2:B100"``, ``"Sheet1!C2:C50"``,
+        ``"SalesTable[Region]"``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    formula1 : str, optional
+        First (or only) constraint value or formula.
+        For ``list``: comma-separated values ``"Yes,No,Maybe"`` or a range
+        reference ``"=$A$1:$A$5"``.
+        For ``custom``: an Excel formula returning TRUE/FALSE, e.g. ``"=ISNUMBER(B2)"``.
+        For constraint types: the bound value, e.g. ``"0"`` or ``"2026-01-01"``.
+    formula2 : str, optional
+        Upper bound — required when ``operator`` is ``between`` or ``not_between``.
+    operator : str, optional
+        Comparison operator for ``whole_number``, ``decimal``, ``date``,
+        ``text_length``. One of:
+        ``between``, ``not_between``, ``equal``, ``not_equal``,
+        ``greater``, ``less``, ``greater_equal``, ``less_equal``.
+        Must be OMITTED for ``list`` and ``custom``.
+    in_cell_dropdown : bool, optional
+        Show dropdown arrow in the cell (``list`` action only, default True).
+    ignore_blank : bool, optional
+        Allow blank cells to bypass validation (default True).
+    show_error : bool, optional
+        Show an error alert when invalid data is entered (default True).
+
+    Actions
+    -------
+    list
+        Restrict entry to a dropdown list of values.
+        Example: ``excel_validation(action="list", range="B2:B100",
+        formula1="Yes,No,Maybe")``
+        Example: ``excel_validation(action="list", range="B2:B100",
+        formula1="=$A$1:$A$5")``
+    whole_number
+        Restrict entry to whole integers.
+        Example: ``excel_validation(action="whole_number", range="C2:C50",
+        formula1="1", formula2="100", operator="between")``
+        Example: ``excel_validation(action="whole_number", range="C2:C50",
+        formula1="0", operator="greater")``
+    decimal
+        Restrict entry to decimal numbers.
+        Example: ``excel_validation(action="decimal", range="D2:D50",
+        formula1="0.0", formula2="1.0", operator="between")``
+    date
+        Restrict entry to dates.
+        Example: ``excel_validation(action="date", range="E2:E50",
+        formula1="2026-01-01", operator="greater_equal")``
+    text_length
+        Restrict text by character count.
+        Example: ``excel_validation(action="text_length", range="F2:F200",
+        formula1="50", operator="less_equal")``
+    custom
+        Validate using an arbitrary Excel formula (evaluates to TRUE = valid).
+        Example: ``excel_validation(action="custom", range="G2:G50",
+        formula1="=ISNUMBER(G2)")``
+        Example: ``excel_validation(action="custom", range="H2:H50",
+        formula1="=LEN(H2)<=100")``
+    clear
+        Remove all validation from the range.
+        Example: ``excel_validation(action="clear", range="B2:B100")``
+    """
+    return validation_action(
+        action,
+        range=range,
+        sheet=sheet,
+        workbook=workbook,
+        formula1=formula1,
+        formula2=formula2,
+        operator=operator,
+        in_cell_dropdown=in_cell_dropdown,
+        ignore_blank=ignore_blank,
+        show_error=show_error,
+    )
+
+
+@mcp.tool()
+def excel_slicer(
+    action: str,
+    workbook: str | None = None,
+    source: str | None = None,
+    field: str | None = None,
+    sheet: str | None = None,
+    caption: str | None = None,
+    name: str | None = None,
+    top: float = 50.0,
+    left: float = 50.0,
+    width: float = 144.0,
+    height: float = 144.0,
+    slicer: str | None = None,
+    pivots: list[str] | None = None,
+) -> dict:
+    """Manage slicers and timelines on PivotTables and Tables.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``add``, ``add_timeline``, ``list``, ``delete``, ``connect``
+    workbook : str, optional
+        Workbook name (active workbook if omitted).
+    source : str
+        (add / add_timeline) Name of the PivotTable or Table (ListObject) to filter.
+    field : str
+        (add / add_timeline) Column / field name to filter on.
+    sheet : str, optional
+        Sheet where the slicer control is placed (active sheet if omitted).
+    caption : str, optional
+        Visible label on the slicer header. Defaults to *field*.
+    name : str, optional
+        Unique slicer-cache name. Excel auto-generates if omitted.
+    top : float
+        Top position in points (default 50.0).
+    left : float
+        Left position in points (default 50.0).
+    width : float
+        Width in points (default 144.0 ≈ 2 inches).
+    height : float
+        Height in points (default 144.0 ≈ 2 inches).
+    slicer : str
+        (delete / connect) Name of the slicer cache to target.
+    pivots : list[str]
+        (connect) List of PivotTable names to connect the slicer to.
+
+    Actions
+    -------
+    add
+        Create a slicer for a Table or PivotTable field.
+
+        Example::
+
+            excel_slicer(action="add", source="SalesTable", field="Region",
+                         caption="Region Filter", top=50, left=200, width=150, height=200)
+
+    add_timeline
+        Create a date-field timeline slicer (requires a date-typed field in a PivotTable).
+
+        Example::
+
+            excel_slicer(action="add_timeline", source="SalesPivot", field="OrderDate")
+
+    list
+        List all slicer caches in the workbook.
+
+        Example::
+
+            excel_slicer(action="list")
+
+    delete
+        Remove a slicer cache (and its visual controls) by cache name.
+
+        Example::
+
+            excel_slicer(action="delete", slicer="Slicer_Region")
+
+    connect
+        Connect an existing slicer cache to one or more additional PivotTables.
+
+        Example::
+
+            excel_slicer(action="connect", slicer="Slicer_Region",
+                         pivots=["PivotTable1", "PivotTable2"])
+    """
+    return slicer_action(
+        action,
+        workbook=workbook,
+        source=source,
+        field=field,
+        sheet=sheet,
+        caption=caption,
+        name=name,
+        top=top,
+        left=left,
+        width=width,
+        height=height,
+        slicer=slicer,
+        pivots=pivots,
     )
 
 

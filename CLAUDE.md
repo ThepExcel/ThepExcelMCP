@@ -14,19 +14,23 @@ purpose: |
 Claude / MCP Client
       │ stdio
 FastMCP server (server.py)
-      │ 10 action-dispatch tools
-      ├── excel_workbook   → domains/workbook.py
-      ├── excel_sheet      → domains/sheets.py
-      ├── excel_range      → domains/ranges.py         (+ read_spill, spill metadata)
-      ├── excel_powerquery → domains/powerquery.py + analysis/pq_analyzer.py
-      ├── excel_table      → domains/tables.py
-      ├── excel_pivot      → domains/pivots.py
-      ├── excel_datamodel  → domains/datamodel.py      ← Phase 2
-      ├── excel_vba        → domains/vba.py            ← Phase 3
-      ├── excel_name       → domains/names.py          ← Phase 3
-      ├── excel_format     → domains/format.py         ← Phase 5 (Tier-1 gap)
-      ├── excel_chart      → domains/charts.py         ← Phase 4
-      └── excel_screenshot → domains/screenshot.py     ← Phase 4
+      │ 14 action-dispatch tools
+      ├── excel_workbook            → domains/workbook.py
+      ├── excel_sheet               → domains/sheets.py
+      ├── excel_range               → domains/ranges.py         (+ read_spill, spill metadata)
+      ├── excel_powerquery          → domains/powerquery.py + analysis/pq_analyzer.py
+      ├── excel_table               → domains/tables.py
+      ├── excel_pivot               → domains/pivots.py
+      ├── excel_datamodel           → domains/datamodel.py      ← Phase 2
+      ├── excel_vba                 → domains/vba.py            ← Phase 3
+      ├── excel_name                → domains/names.py          ← Phase 3
+      ├── excel_format              → domains/format.py         ← Phase 5 (Tier-1 gap)
+      ├── excel_chart               → domains/charts.py         ← Phase 4
+      ├── excel_screenshot          → domains/screenshot.py     ← Phase 4
+      ├── excel_view                → domains/view.py           ← Phase 5
+      ├── excel_conditional_format  → domains/conditional_format.py ← Phase 5
+      ├── excel_validation          → domains/validation.py     ← Phase 5
+      └── excel_slicer              → domains/slicer.py         ← Phase 5
                                           │
                                     ExcelSession (session.py)
                                           │ run_com() → STA COM worker thread
@@ -52,7 +56,7 @@ callables via `queue.Queue` and receive results via `concurrent.futures.Future`.
 
 | File | Role |
 |---|---|
-| `src/thepexcel_mcp/server.py` | FastMCP app + 10 tool registrations |
+| `src/thepexcel_mcp/server.py` | FastMCP app + 14 tool registrations |
 | `src/thepexcel_mcp/session.py` | `ExcelSession` — STA worker thread, `run_com()`, `excel_guard`, `wait_calculation`, ROT fallback |
 | `src/thepexcel_mcp/domains/workbook.py` | Workbook CRUD |
 | `src/thepexcel_mcp/domains/sheets.py` | Sheet CRUD |
@@ -66,6 +70,10 @@ callables via `queue.Queue` and receive results via `concurrent.futures.Future`.
 | `src/thepexcel_mcp/domains/format.py` | **Phase 5** — Range formatting: font/fill/border/number_format/alignment/sizing |
 | `src/thepexcel_mcp/domains/charts.py` | **Phase 4** — Chart CRUD + configure + export PNG |
 | `src/thepexcel_mcp/domains/screenshot.py` | **Phase 4** — Range/sheet/chart capture as PNG (CopyPicture+PIL) |
+| `src/thepexcel_mcp/domains/view.py` | **Phase 5** — Worksheet display: freeze panes, gridlines, zoom, headings |
+| `src/thepexcel_mcp/domains/conditional_format.py` | **Phase 5** — Conditional formatting: cell_rule, data_bar, color_scale, icon_set, top_bottom, clear |
+| `src/thepexcel_mcp/domains/validation.py` | **Phase 5** — Data validation: list, whole_number, decimal, date, text_length, custom, clear |
+| `src/thepexcel_mcp/domains/slicer.py` | **Phase 5** — Slicers + timelines: add, add_timeline, list, delete, connect |
 | `src/thepexcel_mcp/analysis/pq_analyzer.py` | M code static analyzer — copied verbatim from PoC |
 
 ### load_to_table pattern (important)
@@ -78,7 +86,7 @@ to load a query into a worksheet Table. This exact form is required:
 
 Do NOT simplify this — it took real debugging in the PoC to get right.
 
-## Tool registry (Phase 1 + 2 + 3 + 5)
+## Tool registry (Phase 1 + 2 + 3 + 4 + 5)
 
 | Tool | Actions |
 |---|---|
@@ -94,6 +102,10 @@ Do NOT simplify this — it took real debugging in the PoC to get right.
 | `excel_format` | **Phase 5** — `font` (name/size/bold/italic/underline/color), `fill` (bg color or clear), `border` (sides: all/outline/inside/top/bottom/left/right; style: continuous/dash/double/none; weight: thin/medium/thick), `number_format` (any Excel code), `alignment` (h/v align, wrap_text, merge/unmerge), `column_width`, `row_height`, `autofit`. All colors as `"#RRGGBB"` → converted to Excel BGR internally. |
 | `excel_chart` | **Phase 4** — `list`, `create`, `configure`, `set_source`, `export_image`, `delete` |
 | `excel_screenshot` | **Phase 4** — `range`, `sheet`, `chart` (PNG capture for LLM visual verification) |
+| `excel_view` | **Phase 5** — `freeze_panes`, `unfreeze_panes`, `gridlines` (show/hide), `zoom` (10–400%), `headings` (show/hide). Targets workbook window, not Application.ActiveWindow. |
+| `excel_conditional_format` | **Phase 5** — `data_bar`, `color_scale` (2- or 3-color), `icon_set`, `cell_rule` (operator + fill/font color), `top_bottom` (top/bottom N items or %), `clear` |
+| `excel_validation` | **Phase 5** — `list` (dropdown), `whole_number`, `decimal`, `date`, `text_length`, `custom` (formula), `clear`. Always clears existing rules before adding (COM error 1004 avoidance). |
+| `excel_slicer` | **Phase 5** — `add` (Table or PivotTable slicer), `add_timeline` (date-field timeline), `list`, `delete`, `connect` (link slicer cache to additional pivots) |
 
 ### Structured references
 
@@ -105,7 +117,7 @@ native Range() parser — no special handling needed. Documented in both
 
 ```powershell
 uv sync                                                          # install deps
-uv run pytest -q                                                 # 251 unit tests (no Excel needed)
+uv run pytest -q                                                 # 397 unit tests (no Excel needed)
 THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py     # full live COM smoke
 THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py --sections 1,2,3,4  # partial (sections 1-12 available)
 uv run thepexcel-mcp                                            # run stdio server
