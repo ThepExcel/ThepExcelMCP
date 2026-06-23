@@ -399,7 +399,7 @@ def _sort(name: str, workbook: str | None, col_name: str, ascending: bool) -> di
         lo_sort.SortFields.Clear()
         lo_sort.SortFields.Add(
             col_range,
-            1,  # xlSortOnValues
+            0,  # xlSortOnValues (0); was wrongly 1 = xlSortOnCellColor → no-op
             _XL_ASCENDING if ascending else _XL_DESCENDING,
         )
         lo_sort.Header = _XL_YES

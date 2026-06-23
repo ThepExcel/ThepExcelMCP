@@ -319,13 +319,22 @@ def _write(
         raise ToolError("write requires a non-empty 2-D list of values.")
     rows = len(values)
     cols = max((len(r) if isinstance(r, (list, tuple)) else 1) for r in values)
+    # Normalize to a rectangular tuple-of-tuples so COM accepts ragged lists.
+    padded = tuple(
+        tuple(r[c] if isinstance(r, (list, tuple)) and c < len(r) else None for c in range(cols))
+        for r in values
+    )
     rng = _resolve_range(range_str, sheet, workbook)
     try:
-        # Anchor at the top-left cell and resize to the data shape so that a
-        # single-cell anchor (e.g. "A1") expands to the full block. This is
-        # idempotent when the caller already passes a correctly-sized range.
-        target = rng.Cells(1, 1).Resize(rows, cols)
-        target.Value = values
+        # pywin32 dispatch quirk: Range.Resize(r,c) and Range.Offset(r,c) act as
+        # indexed-property access → return a SINGLE offset cell (Count==1), not a
+        # block.  Build the target block explicitly via Range(Cells, Cells) instead
+        # — this is what xlwings does internally and is verified correct.
+        ws = rng.Parent
+        tl = rng.Cells(1, 1)
+        r1, c1 = tl.Row, tl.Column
+        target = ws.Range(ws.Cells(r1, c1), ws.Cells(r1 + rows - 1, c1 + cols - 1))
+        target.Value = padded
         return {"written": {"rows": rows, "cols": cols, "range": target.Address}}
     except Exception as e:
         raise _session.wrap(e, "Write failed")

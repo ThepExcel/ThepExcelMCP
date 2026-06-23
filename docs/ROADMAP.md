@@ -74,10 +74,41 @@ The VBA + Power Query + Data Model cluster requires desktop COM — no cloud com
 - **`pivot.delete` OLE error 0x800a01a8** — `pt.TableRange2.Delete()` fails when COM object is stale. Fix: get address first, then `pt.Parent.Range(addr).Delete()`.
 - **`wb.Close()` thread violation** — `close_wb` called from wrong thread. Fix: wrap in `_session.run_com()`.
 
+### COM bugs fixed post-P5
+
+- **`excel_range` write wrote only top-left cell (2026-06-23)** — commit f7f95ad (2026-06-16)
+  introduced `rng.Cells(1,1).Resize(rows,cols)` to expand a single-cell anchor to the full
+  block. This was **ineffective**: pywin32 dispatches `Range.Resize(r,c)` as an indexed property
+  access and returns the single cell at offset (r,c) (`.Count==1`), not a block. Same quirk
+  applies to `Range.Offset(r,c)`. Corrected 2026-06-23 by building the target block via
+  `ws.Range(ws.Cells(r1,c1), ws.Cells(r2,c2))` — the approach xlwings uses internally.
+  Live-verified: 2×3 write + full readback PASS.
+
+- **`excel_table` sort never reordered rows (2026-06-23)** — `lo.Sort.SortFields.Add(range, 1, order)`
+  passed `SortOn=1` which is `xlSortOnCellColor`. Sorting on a uniform cell color is a no-op.
+  Fixed: changed to `SortOn=0` (`xlSortOnValues`). Live-verified: ascending sort on a 3-row
+  table, readback confirmed correct order.
+
 ### Known limitations
 
-- **Data Model `add_table` deadlocks in automation context** — `WorkbookConnection.Refresh()` for Mashup/PQ model connections requires Excel's UI message pump. Our STA COM worker blocks the pump → deadlock until timeout (120 s). Works correctly in Claude Desktop with a visible Excel. All 12 Data Model smoke test items are SKIPped with explicit "no UI pump" message. The tool works in real usage.
-- **`wb.Close()` deadlocks when workbook has pending PQ connections** — same root cause as above. Smoke test smoke deletes PQ queries before close (best-effort) and uses 30 s timeout; on timeout marks `_excel_busy=True` so subsequent sections skip rather than deadlock.
+- **Data Model `add_table` / `load_to_datamodel` deadlocks in Claude Code + stdio context** —
+  `WorkbookConnection.Refresh()` on a Mashup/PQ connection does not merely time out; it
+  **blocks ALL subsequent COM calls** until Excel is force-killed (confirmed live test
+  2026-06-23). Root cause: the call re-enters the STA message pump via a modal dialog or
+  internal OLE callback that never resolves when there is no visible UI pump being driven.
+  Works correctly when Excel is visible and a real user is present (Claude Desktop). All 12
+  Data Model smoke test items are SKIPped with explicit "no UI pump" message.
+- **`wb.Close()` deadlocks when workbook has pending PQ connections** — same root cause as
+  above. Smoke test deletes PQ queries before close (best-effort) and uses 30 s timeout; on
+  timeout marks `_excel_busy=True` so subsequent sections skip rather than deadlock.
+
+### Known pywin32 COM gotchas
+
+- **`Range.Resize(r, c)` and `Range.Offset(r, c)`** dispatch via IDispatch as indexed
+  property access → return the **single cell at that offset** (Count==1), not the block you
+  expect. Use `ws.Range(ws.Cells(r1,c1), ws.Cells(r2,c2))` to build a rectangular block, or
+  call `rng.GetResize(r,c)` / `rng.GetOffset(r,c)` (the explicit method forms that DO return
+  the block). This affects both late-binding and early-binding dispatch under pywin32.
 
 ## Moat ideas nobody covers (from landscape scan)
 

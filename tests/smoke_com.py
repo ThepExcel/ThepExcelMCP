@@ -205,6 +205,24 @@ def run_workbook_sheet_range() -> None:
         except Exception as e:
             record("range.write_read", "FAIL", str(e))
 
+        # range write 2-D via MCP tool — read-back verifies every cell (guards
+        # against pywin32 Resize quirk where only [0][0] was written)
+        try:
+            payload = [["P", "Q"], ["R", "S"], ["T", "U"]]  # 3 rows x 2 cols
+            range_action("write", range="H1", sheet="Sheet1", workbook=wb_name,
+                         values=payload)
+            rb = range_action("read", range="H1:I3", sheet="Sheet1", workbook=wb_name)
+            assert rb["total_rows"] == 3, f"expected 3 rows, got {rb['total_rows']}"
+            for i, row in enumerate(payload):
+                for j, expected in enumerate(row):
+                    got = rb["values"][i][j]
+                    assert got == expected, (
+                        f"cell [{i}][{j}]: expected {expected!r}, got {got!r}"
+                    )
+            record("range.write_2d_readback", "PASS")
+        except Exception as e:
+            record("range.write_2d_readback", "FAIL", str(e))
+
         # write_formula + spill (SEQUENCE)
         try:
             range_action("write_formula", range="E1", formula="=SEQUENCE(5,3)",
@@ -296,10 +314,17 @@ def run_tables() -> None:
         except Exception as e:
             record("table.add_column", "FAIL", str(e))
 
-        # sort
+        # sort — read-back verifies actual reorder (guards against SortOn=1
+        # xlSortOnCellColor no-op bug where sort appeared to succeed but did nothing)
         try:
             table_action("sort", name="Sales", workbook=wb_name,
                          sort_column="Amount", ascending=False)
+            rb = table_action("read", name="Sales", workbook=wb_name, limit=20)
+            amt_idx = rb["columns"].index("Amount")
+            amounts = [row[amt_idx] for row in rb["values"]]
+            assert amounts == sorted(amounts, reverse=True), (
+                f"Amount column not sorted descending after sort: {amounts}"
+            )
             record("table.sort", "PASS")
         except Exception as e:
             record("table.sort", "FAIL", str(e))
