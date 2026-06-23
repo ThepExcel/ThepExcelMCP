@@ -11,6 +11,7 @@ from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domai
 
 from .domains.charts import chart_action
 from .domains.datamodel import datamodel_action
+from .domains.format import format_action
 from .domains.names import name_action
 from .domains.pivots import pivot_action
 from .domains.powerquery import powerquery_action
@@ -43,12 +44,15 @@ def excel_workbook(
     Parameters
     ----------
     action : str
-        One of: ``list``, ``info``, ``open``, ``save``, ``close``.
+        One of: ``list``, ``info``, ``open``, ``save``, ``close``,
+        ``create``, ``save_as``.
     workbook : str, optional
         Workbook name (e.g. ``"Sales.xlsx"``). Uses active workbook when omitted
-        (not applicable to ``list`` and ``open``).
+        (not applicable to ``list``, ``open``, and ``create``).
     path : str, optional
-        Full file path. Required for ``open`` (e.g. ``"C:/data/Sales.xlsx"``).
+        Full file path. Required for ``open`` and ``save_as``.
+        Optional for ``create`` (if given, SaveAs is called immediately).
+        Example: ``"C:/data/Sales.xlsx"``
 
     Actions
     -------
@@ -65,6 +69,16 @@ def excel_workbook(
         Saves the workbook (equivalent to Ctrl+S).
     close
         Closes without saving. Use with caution — data loss is possible.
+    create
+        Creates a new blank workbook (Workbooks.Add()). If ``path`` is given,
+        immediately SaveAs to that path. File format inferred from extension
+        (.xlsx=51, .xlsm=52, .xlsb=50, .xls=56, .csv=6).
+        Example: ``excel_workbook(action="create")``
+        Example: ``excel_workbook(action="create", path="C:/data/New.xlsx")``
+    save_as
+        Saves the active/named workbook to a new file path. File format is
+        inferred from the extension. Suppresses overwrite prompts automatically.
+        Example: ``excel_workbook(action="save_as", path="C:/data/Copy.xlsx")``
     """
     return workbook_action(action, workbook=workbook, path=path)
 
@@ -1011,6 +1025,180 @@ def excel_screenshot(
         workbook=workbook,
         output_path=output_path,
         name=name,
+    )
+
+
+@mcp.tool()
+def excel_format(
+    action: str,
+    range: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    # font
+    font_name: str | None = None,
+    font_size: float | None = None,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    underline: bool | None = None,
+    font_color: str | None = None,
+    # fill
+    fill_color: str | None = None,
+    clear_fill: bool = False,
+    # border
+    border_sides: str = "outline",
+    border_style: str = "continuous",
+    border_weight: str = "thin",
+    border_color: str | None = None,
+    # number_format
+    number_format: str | None = None,
+    # alignment
+    horizontal: str | None = None,
+    vertical: str | None = None,
+    wrap_text: bool | None = None,
+    merge: bool | None = None,
+    # column/row sizing
+    width: float | None = None,
+    height: float | None = None,
+    # autofit
+    autofit_columns: bool = True,
+    autofit_rows: bool = False,
+) -> dict:
+    """Apply formatting to any Excel range.
+
+    All color parameters accept ``"#RRGGBB"`` hex strings (converted to Excel
+    BGR internally). No existing data or formulas are affected — formatting only.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``font``, ``fill``, ``border``, ``number_format``,
+        ``alignment``, ``column_width``, ``row_height``, ``autofit``.
+    range : str
+        Range address. Same syntax as ``excel_range``:
+        ``"A1:C10"``, ``"Sheet1!A1:C10"``, ``"SalesTable[Amount]"``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    font_name : str, optional
+        Font family name for ``font`` action (e.g. ``"Calibri"``).
+    font_size : float, optional
+        Font size in points for ``font`` action (e.g. ``12.0``).
+    bold : bool, optional
+        Bold on/off for ``font`` action.
+    italic : bool, optional
+        Italic on/off for ``font`` action.
+    underline : bool, optional
+        Underline on/off for ``font`` action (single underline).
+    font_color : str, optional
+        Font color ``"#RRGGBB"`` for ``font`` action (e.g. ``"#FF0000"``).
+    fill_color : str, optional
+        Background color ``"#RRGGBB"`` for ``fill`` action.
+    clear_fill : bool, optional
+        When True, removes the background fill (``fill`` action).
+    border_sides : str, optional
+        Which sides to apply border (``border`` action):
+        ``outline`` (default), ``all``, ``inside``, ``top``, ``bottom``,
+        ``left``, ``right``.
+    border_style : str, optional
+        Line style for ``border`` action:
+        ``continuous`` (default), ``dash``, ``double``, ``none``.
+    border_weight : str, optional
+        Line weight for ``border`` action:
+        ``thin`` (default), ``medium``, ``thick``.
+    border_color : str, optional
+        Border color ``"#RRGGBB"`` for ``border`` action.
+    number_format : str, optional
+        Excel NumberFormat code for ``number_format`` action.
+        Examples: ``"#,##0.00"``, ``"0.0%"``, ``"yyyy-mm-dd"``,
+        ``"$#,##0.00"``.
+    horizontal : str, optional
+        Horizontal alignment for ``alignment`` action:
+        ``general``, ``left``, ``center``, ``right``.
+    vertical : str, optional
+        Vertical alignment for ``alignment`` action:
+        ``top``, ``center``, ``bottom``.
+    wrap_text : bool, optional
+        Wrap text on/off for ``alignment`` action.
+    merge : bool, optional
+        True = merge cells, False = unmerge, None = no change.
+        For ``alignment`` action.
+    width : float, optional
+        Column width in character-width units for ``column_width`` action.
+    height : float, optional
+        Row height in points for ``row_height`` action.
+    autofit_columns : bool, optional
+        AutoFit column widths (default True for ``autofit`` action).
+    autofit_rows : bool, optional
+        AutoFit row heights (default False for ``autofit`` action).
+
+    Actions
+    -------
+    font
+        Set font properties. Pass any combination of font_name, font_size,
+        bold, italic, underline, font_color.
+        Example: ``excel_format(action="font", range="A1:C1",
+        bold=True, font_size=14, font_color="#FFFFFF")``
+    fill
+        Set background color or clear fill.
+        Example: ``excel_format(action="fill", range="A1:C1",
+        fill_color="#D4A84B")``
+        Example: ``excel_format(action="fill", range="A1:C1", clear_fill=True)``
+    border
+        Apply borders. Defaults: sides=outline, style=continuous, weight=thin.
+        Example: ``excel_format(action="border", range="A1:D10",
+        border_sides="all", border_weight="thin")``
+        Example: ``excel_format(action="border", range="A1:D10",
+        border_sides="outline", border_weight="medium", border_color="#000000")``
+    number_format
+        Set a NumberFormat code string.
+        Example: ``excel_format(action="number_format", range="D2:D100",
+        number_format="#,##0.00")``
+        Example: ``excel_format(action="number_format", range="E2:E100",
+        number_format="0.0%")``
+    alignment
+        Set horizontal/vertical alignment, wrap_text, or merge cells.
+        Example: ``excel_format(action="alignment", range="A1:D1",
+        horizontal="center", vertical="center", wrap_text=True)``
+        Example: ``excel_format(action="alignment", range="A1:D1", merge=True)``
+    column_width
+        Set explicit column width in character-width units.
+        Example: ``excel_format(action="column_width", range="A:A", width=20)``
+    row_height
+        Set explicit row height in points.
+        Example: ``excel_format(action="row_height", range="1:1", height=30)``
+    autofit
+        AutoFit columns and/or rows to content.
+        Example: ``excel_format(action="autofit", range="A:D")``
+        Example: ``excel_format(action="autofit", range="A1:D20",
+        autofit_columns=True, autofit_rows=True)``
+    """
+    return format_action(
+        action,
+        range=range,
+        sheet=sheet,
+        workbook=workbook,
+        font_name=font_name,
+        font_size=font_size,
+        bold=bold,
+        italic=italic,
+        underline=underline,
+        font_color=font_color,
+        fill_color=fill_color,
+        clear_fill=clear_fill,
+        border_sides=border_sides,
+        border_style=border_style,
+        border_weight=border_weight,
+        border_color=border_color,
+        number_format=number_format,
+        horizontal=horizontal,
+        vertical=vertical,
+        wrap_text=wrap_text,
+        merge=merge,
+        width=width,
+        height=height,
+        autofit_columns=autofit_columns,
+        autofit_rows=autofit_rows,
     )
 
 

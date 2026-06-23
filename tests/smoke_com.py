@@ -86,6 +86,7 @@ try:
     from thepexcel_mcp.domains.screenshot import screenshot_action
     from thepexcel_mcp.domains.names      import name_action
     from thepexcel_mcp.domains.vba        import vba_action
+    from thepexcel_mcp.domains.format     import format_action
 except ImportError as e:
     print(f"Import failed: {e}")
     sys.exit(1)
@@ -1115,6 +1116,247 @@ def run_write_py() -> None:
         _close_wb(wb, wb_name or "unknown")
 
 
+# ── Section 11: excel_format ──────────────────────────────────────────────────
+
+def run_format() -> None:
+    section_header("SECTION 11 — excel_format (font / fill / border / number_format / alignment / autofit)")
+    if _check_excel_busy(*[
+        "format.font", "format.fill", "format.border",
+        "format.number_format", "format.alignment",
+        "format.column_width", "format.row_height", "format.autofit",
+    ]):
+        return
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        def _write_data():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1:C1").Value = [["Name", "Amount", "Rate"]]
+            ws.Range("A2:C4").Value = [
+                ["Alpha", 1000, 0.1],
+                ["Beta",  2500, 0.15],
+                ["Gamma", 750,  0.05],
+            ]
+        _session.run_com(_write_data)
+
+        # --- font: bold + size + color on header row ---
+        try:
+            format_action("font", range="A1:C1", sheet="Sheet1", workbook=wb_name,
+                          bold=True, font_size=12, font_color="#FFFFFF")
+            # Read back via COM to verify
+            def _check_font():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1:C1")
+                return rng.Font.Bold, rng.Font.Size, rng.Font.Color
+            bold_val, size_val, color_val = _session.run_com(_check_font)
+            assert bold_val is True, f"Font.Bold expected True, got {bold_val}"
+            assert size_val == 12, f"Font.Size expected 12, got {size_val}"
+            # White #FFFFFF → BGR=0xFFFFFF=16777215
+            assert color_val == 16777215, f"Font.Color expected 16777215, got {color_val}"
+            record("format.font", "PASS",
+                   f"bold={bold_val} size={size_val} color={color_val}")
+        except Exception as e:
+            record("format.font", "FAIL", str(e))
+
+        # --- fill: gold header background ---
+        try:
+            format_action("fill", range="A1:C1", sheet="Sheet1", workbook=wb_name,
+                          fill_color="#D4A84B")
+            def _check_fill():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").Interior.Color
+            fill_color_val = _session.run_com(_check_fill)
+            # #D4A84B → R=0xD4=212, G=0xA8=168, B=0x4B=75
+            # BGR = (75<<16)|(168<<8)|212 = 4958420
+            expected_bgr = (0x4B << 16) | (0xA8 << 8) | 0xD4
+            assert fill_color_val == expected_bgr, (
+                f"Interior.Color expected {expected_bgr}, got {fill_color_val}"
+            )
+            record("format.fill", "PASS", f"Interior.Color={fill_color_val}")
+        except Exception as e:
+            record("format.fill", "FAIL", str(e))
+
+        # --- border: outline on data range ---
+        try:
+            format_action("border", range="A1:C4", sheet="Sheet1", workbook=wb_name,
+                          border_sides="outline", border_style="continuous",
+                          border_weight="medium", border_color="#000000")
+            def _check_border():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                # xlEdgeTop=8
+                return ws.Range("A1:C4").Borders(8).LineStyle
+            ls = _session.run_com(_check_border)
+            assert ls == 1, f"LineStyle expected 1 (continuous), got {ls}"
+            record("format.border", "PASS", f"LineStyle={ls}")
+        except Exception as e:
+            record("format.border", "FAIL", str(e))
+
+        # --- number_format: currency on Amount column ---
+        try:
+            format_action("number_format", range="B2:B4", sheet="Sheet1", workbook=wb_name,
+                          number_format="#,##0.00")
+            def _check_nf():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("B2").NumberFormat
+            nf = _session.run_com(_check_nf)
+            assert nf == "#,##0.00", f"NumberFormat expected '#,##0.00', got {nf!r}"
+            record("format.number_format", "PASS", f"NumberFormat={nf!r}")
+        except Exception as e:
+            record("format.number_format", "FAIL", str(e))
+
+        # --- alignment: center header ---
+        try:
+            format_action("alignment", range="A1:C1", sheet="Sheet1", workbook=wb_name,
+                          horizontal="center", vertical="center")
+            def _check_align():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                rng = ws.Range("A1")
+                return rng.HorizontalAlignment, rng.VerticalAlignment
+            h_align, v_align = _session.run_com(_check_align)
+            assert h_align == -4108, f"HorizontalAlignment expected -4108 (center), got {h_align}"
+            assert v_align == -4108, f"VerticalAlignment expected -4108 (center), got {v_align}"
+            record("format.alignment", "PASS",
+                   f"h={h_align} v={v_align}")
+        except Exception as e:
+            record("format.alignment", "FAIL", str(e))
+
+        # --- column_width ---
+        try:
+            format_action("column_width", range="A:A", sheet="Sheet1", workbook=wb_name,
+                          width=20.0)
+            def _check_cw():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").ColumnWidth
+            cw = _session.run_com(_check_cw)
+            # Excel may round slightly; allow a small tolerance
+            assert abs(cw - 20.0) < 1.0, f"ColumnWidth expected ~20, got {cw}"
+            record("format.column_width", "PASS", f"ColumnWidth={cw}")
+        except Exception as e:
+            record("format.column_width", "FAIL", str(e))
+
+        # --- row_height ---
+        try:
+            format_action("row_height", range="1:1", sheet="Sheet1", workbook=wb_name,
+                          height=30.0)
+            def _check_rh():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").RowHeight
+            rh = _session.run_com(_check_rh)
+            assert abs(rh - 30.0) < 1.0, f"RowHeight expected ~30, got {rh}"
+            record("format.row_height", "PASS", f"RowHeight={rh}")
+        except Exception as e:
+            record("format.row_height", "FAIL", str(e))
+
+        # --- autofit ---
+        try:
+            format_action("autofit", range="A:C", sheet="Sheet1", workbook=wb_name,
+                          autofit_columns=True, autofit_rows=False)
+            record("format.autofit", "PASS")
+        except Exception as e:
+            record("format.autofit", "FAIL", str(e))
+
+    except Exception as e:
+        record("section11.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 12: Workbook create / save_as ─────────────────────────────────────
+
+def run_workbook_create_save_as() -> None:
+    section_header("SECTION 12 — workbook.create + workbook.save_as")
+    if _check_excel_busy("workbook.create", "workbook.create_with_path",
+                         "workbook.save_as"):
+        return
+    import tempfile
+
+    wb = None
+    wb_name = None
+    wb2 = None
+    wb2_name = None
+    tmp_path_create = None
+    tmp_path_save_as = None
+    try:
+        # --- create: blank (no path) ---
+        try:
+            r = workbook_action("create")
+            wb_name = r["created"]
+            assert wb_name, "create returned empty name"
+            # verify it is now open
+            r2 = workbook_action("list")
+            names = [w["name"] for w in r2["workbooks"]]
+            assert wb_name in names, f"{wb_name} not found in {names}"
+            # resolve COM object for cleanup
+            def _get_wb(name):
+                return _session.get_workbook(name)
+            wb = _session.run_com(_get_wb, wb_name)
+            record("workbook.create", "PASS", f"created={wb_name}")
+        except Exception as e:
+            record("workbook.create", "FAIL", str(e))
+
+        # --- create_with_path: create + immediate SaveAs ---
+        try:
+            tmp_dir = tempfile.gettempdir()
+            tmp_path_create = os.path.join(tmp_dir, "thepexcel_mcp_smoke_create.xlsx")
+            # Remove if exists from a previous run
+            if os.path.exists(tmp_path_create):
+                os.remove(tmp_path_create)
+
+            r = workbook_action("create", path=tmp_path_create)
+            wb2_name = r["created"]
+            assert os.path.exists(tmp_path_create), (
+                f"File not created on disk: {tmp_path_create}"
+            )
+            # Read-back: file on disk is the proof
+            wb2 = _session.run_com(lambda: _session.get_workbook(wb2_name))
+            record("workbook.create_with_path", "PASS",
+                   f"file_exists={os.path.exists(tmp_path_create)} name={wb2_name}")
+        except Exception as e:
+            record("workbook.create_with_path", "FAIL", str(e))
+
+        # --- save_as: SaveAs existing workbook to new path ---
+        try:
+            # Use the first created blank wb (wb_name)
+            if wb_name:
+                tmp_path_save_as = os.path.join(
+                    tempfile.gettempdir(), "thepexcel_mcp_smoke_saveas.xlsx"
+                )
+                if os.path.exists(tmp_path_save_as):
+                    os.remove(tmp_path_save_as)
+
+                r = workbook_action("save_as", workbook=wb_name, path=tmp_path_save_as)
+                assert os.path.exists(tmp_path_save_as), (
+                    f"SaveAs file not found on disk: {tmp_path_save_as}"
+                )
+                assert "saved_as" in r, f"Expected 'saved_as' key in result: {r}"
+                record("workbook.save_as", "PASS",
+                       f"file_exists=True path={os.path.basename(tmp_path_save_as)}")
+            else:
+                record("workbook.save_as", "SKIP", "workbook.create failed — no wb to save_as")
+        except Exception as e:
+            record("workbook.save_as", "FAIL", str(e))
+
+    except Exception as e:
+        record("section12.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        # Close both temp workbooks
+        if wb is not None:
+            _close_wb(wb, wb_name or "unknown")
+        if wb2 is not None:
+            _close_wb(wb2, wb2_name or "unknown")
+        # Clean up temp files
+        for tmp in (tmp_path_create, tmp_path_save_as):
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
+
+
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
@@ -1141,6 +1383,8 @@ _ALL_SECTIONS = {
     "8": run_screenshot,
     "9": run_vba,
     "10": run_write_py,
+    "11": run_format,
+    "12": run_workbook_create_save_as,
 }
 
 

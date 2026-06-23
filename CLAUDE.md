@@ -14,7 +14,7 @@ purpose: |
 Claude / MCP Client
       │ stdio
 FastMCP server (server.py)
-      │ 9 action-dispatch tools
+      │ 10 action-dispatch tools
       ├── excel_workbook   → domains/workbook.py
       ├── excel_sheet      → domains/sheets.py
       ├── excel_range      → domains/ranges.py         (+ read_spill, spill metadata)
@@ -24,6 +24,7 @@ FastMCP server (server.py)
       ├── excel_datamodel  → domains/datamodel.py      ← Phase 2
       ├── excel_vba        → domains/vba.py            ← Phase 3
       ├── excel_name       → domains/names.py          ← Phase 3
+      ├── excel_format     → domains/format.py         ← Phase 5 (Tier-1 gap)
       ├── excel_chart      → domains/charts.py         ← Phase 4
       └── excel_screenshot → domains/screenshot.py     ← Phase 4
                                           │
@@ -51,7 +52,7 @@ callables via `queue.Queue` and receive results via `concurrent.futures.Future`.
 
 | File | Role |
 |---|---|
-| `src/thepexcel_mcp/server.py` | FastMCP app + 9 tool registrations |
+| `src/thepexcel_mcp/server.py` | FastMCP app + 10 tool registrations |
 | `src/thepexcel_mcp/session.py` | `ExcelSession` — STA worker thread, `run_com()`, `excel_guard`, `wait_calculation`, ROT fallback |
 | `src/thepexcel_mcp/domains/workbook.py` | Workbook CRUD |
 | `src/thepexcel_mcp/domains/sheets.py` | Sheet CRUD |
@@ -62,6 +63,7 @@ callables via `queue.Queue` and receive results via `concurrent.futures.Future`.
 | `src/thepexcel_mcp/domains/datamodel.py` | **Phase 2** — 11 Data Model ops (model tables, relationships, DAX measures) |
 | `src/thepexcel_mcp/domains/vba.py` | **Phase 3** — VBA module CRUD + macro execution (opt-in via env + AccessVBOM check) |
 | `src/thepexcel_mcp/domains/names.py` | **Phase 3** — Named ranges, LAMBDA formulas, defined name CRUD |
+| `src/thepexcel_mcp/domains/format.py` | **Phase 5** — Range formatting: font/fill/border/number_format/alignment/sizing |
 | `src/thepexcel_mcp/domains/charts.py` | **Phase 4** — Chart CRUD + configure + export PNG |
 | `src/thepexcel_mcp/domains/screenshot.py` | **Phase 4** — Range/sheet/chart capture as PNG (CopyPicture+PIL) |
 | `src/thepexcel_mcp/analysis/pq_analyzer.py` | M code static analyzer — copied verbatim from PoC |
@@ -76,11 +78,11 @@ to load a query into a worksheet Table. This exact form is required:
 
 Do NOT simplify this — it took real debugging in the PoC to get right.
 
-## Tool registry (Phase 1 + 2 + 3)
+## Tool registry (Phase 1 + 2 + 3 + 5)
 
 | Tool | Actions |
 |---|---|
-| `excel_workbook` | `list`, `info`, `open`, `save`, `close` |
+| `excel_workbook` | `list`, `info`, `open`, `save`, `close`, `create` (Workbooks.Add + optional SaveAs), `save_as` (FileFormat inferred from extension) |
 | `excel_sheet` | `list`, `add`, `rename`, `delete` |
 | `excel_range` | `read` (paginated, 100-row default; spill metadata in response), `read_spill` (full spill range for dynamic array anchor), `write`, `write_formula` (Formula2/dynamic arrays), `write_py` (**Phase 4** — `=PY()` Formula2R1C1 insertion, experimental), `clear` |
 | `excel_powerquery` | `list`, `get`, `create`, `update`, `delete`, `refresh`, `refresh_all`, `load_to_table`, `load_to_datamodel` (**Phase 2**), `analyze`, `analyze_raw`. `create`/`update` return `warnings` list from M code analyzer (non-blocking). `list` includes `model_connection` flag. |
@@ -89,6 +91,7 @@ Do NOT simplify this — it took real debugging in the PoC to get right.
 | `excel_datamodel` | **Phase 2** — `info`, `list_tables`, `add_table` (table\|query → model via CreateModelConnection=True), `list_relationships`, `add_relationship`, `delete_relationship`, `list_measures`, `add_measure` (DAX + format), `update_measure`, `delete_measure`, `refresh` |
 | `excel_vba` | **Phase 3** — `list_modules`, `get_module`, `write_module`, `delete_module`, `run`. Opt-in: `THEPEXCEL_MCP_ENABLE_VBA=1` + AccessVBOM registry check per call. |
 | `excel_name` | **Phase 3** — `list`, `get`, `set`, `delete`. Covers named ranges, constants, and LAMBDA formulas. `is_lambda` flag on list/get. |
+| `excel_format` | **Phase 5** — `font` (name/size/bold/italic/underline/color), `fill` (bg color or clear), `border` (sides: all/outline/inside/top/bottom/left/right; style: continuous/dash/double/none; weight: thin/medium/thick), `number_format` (any Excel code), `alignment` (h/v align, wrap_text, merge/unmerge), `column_width`, `row_height`, `autofit`. All colors as `"#RRGGBB"` → converted to Excel BGR internally. |
 | `excel_chart` | **Phase 4** — `list`, `create`, `configure`, `set_source`, `export_image`, `delete` |
 | `excel_screenshot` | **Phase 4** — `range`, `sheet`, `chart` (PNG capture for LLM visual verification) |
 
@@ -102,9 +105,9 @@ native Range() parser — no special handling needed. Documented in both
 
 ```powershell
 uv sync                                                          # install deps
-uv run pytest -q                                                 # 192 unit tests (no Excel needed)
+uv run pytest -q                                                 # 251 unit tests (no Excel needed)
 THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py     # full live COM smoke
-THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py --sections 1,2,3,4  # partial
+THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py --sections 1,2,3,4  # partial (sections 1-12 available)
 uv run thepexcel-mcp                                            # run stdio server
 uv run python scripts/build_mcpb.py                             # build dist/thepexcel-mcp.mcpb
 claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMCP thepexcel-mcp  # register
