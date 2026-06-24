@@ -288,3 +288,339 @@ class TestFormatInfo:
         # Should not raise
         result = _format_info(mock_m)
         assert isinstance(result, str)
+
+
+# ── Cube formula builder (pure Python, no COM) ────────────────────────────────
+
+class TestCubeFormulaBuilders:
+    """Exact-match assertions for _build_cubevalue / _build_cubemember.
+
+    All expected strings were verified in scratch/tier3/exp_cube_formula.py
+    Layer A (10/10 offline exact-match checks).
+    """
+
+    def test_cubevalue_measure_only_friendly(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubevalue
+        assert _build_cubevalue("Total Sales") == (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]")'
+        )
+
+    def test_cubevalue_measure_only_already_mdx(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubevalue
+        assert _build_cubevalue("[Measures].[Total Sales]") == (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]")'
+        )
+
+    def test_cubevalue_measure_plus_one_member(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubevalue
+        assert _build_cubevalue(
+            "Total Sales", ["[Products].[Category].[Bikes]"]
+        ) == (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]",'
+            '"[Products].[Category].[Bikes]")'
+        )
+
+    def test_cubevalue_measure_plus_two_members(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubevalue
+        assert _build_cubevalue(
+            "Total Sales",
+            ["[Products].[Category].[Bikes]", "[Date].[CalendarYear].[2024]"],
+        ) == (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]",'
+            '"[Products].[Category].[Bikes]","[Date].[CalendarYear].[2024]")'
+        )
+
+    def test_cubevalue_custom_connection(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubevalue
+        assert _build_cubevalue("Total Sales", connection="MyOlapCube") == (
+            '=CUBEVALUE("MyOlapCube","[Measures].[Total Sales]")'
+        )
+
+    def test_cubemember_no_caption(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubemember
+        assert _build_cubemember("[Products].[Category].[Bikes]") == (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Products].[Category].[Bikes]")'
+        )
+
+    def test_cubemember_with_caption(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubemember
+        assert _build_cubemember(
+            "[Products].[Category].[Bikes]", caption="Bikes"
+        ) == (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Products].[Category].[Bikes]","Bikes")'
+        )
+
+    def test_cubemember_measure_member(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubemember
+        assert _build_cubemember("[Measures].[Total Sales]") == (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Measures].[Total Sales]")'
+        )
+
+    def test_cubevalue_inner_quote_escaped(self):
+        from thepexcel_mcp.domains.datamodel import _build_cubevalue
+        assert _build_cubevalue('[Measures].[Say "Hi"]') == (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Say ""Hi""]")'
+        )
+
+
+# ── cube_formula dispatch (pure Python, no COM) ───────────────────────────────
+
+class TestCubeFormulaDispatch:
+    """cube_formula action is pure Python — no COM call, no session needed."""
+
+    def _action(self, **kwargs):
+        # cube_formula never calls run_com, so session mock is irrelevant.
+        mock_session = make_mock_session()
+        with patch("thepexcel_mcp.domains.datamodel._session", mock_session):
+            from thepexcel_mcp.domains.datamodel import datamodel_action
+            return datamodel_action(**kwargs)
+
+    def test_cubevalue_kind_default(self):
+        result = self._action(action="cube_formula", measure="Total Sales")
+        assert result["formula"] == (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]")'
+        )
+
+    def test_cubevalue_kind_explicit(self):
+        result = self._action(action="cube_formula", kind="cubevalue", measure="Revenue")
+        assert result["formula"].startswith("=CUBEVALUE(")
+
+    def test_cubemember_kind(self):
+        result = self._action(
+            action="cube_formula",
+            kind="cubemember",
+            member_expression="[Products].[Category].[Bikes]",
+        )
+        assert result["formula"] == (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Products].[Category].[Bikes]")'
+        )
+
+    def test_cubemember_with_caption(self):
+        result = self._action(
+            action="cube_formula",
+            kind="cubemember",
+            member_expression="[Products].[Category].[Bikes]",
+            caption="Bikes",
+        )
+        assert result["formula"] == (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Products].[Category].[Bikes]","Bikes")'
+        )
+
+    def test_cubevalue_missing_measure_raises(self):
+        with pytest.raises(ToolError, match="requires 'measure'"):
+            self._action(action="cube_formula", kind="cubevalue")
+
+    def test_cubemember_missing_member_expression_raises(self):
+        with pytest.raises(ToolError, match="requires 'member_expression'"):
+            self._action(action="cube_formula", kind="cubemember")
+
+    def test_invalid_kind_raises(self):
+        with pytest.raises(ToolError, match="kind.*invalid"):
+            self._action(action="cube_formula", kind="badkind", measure="M")
+
+
+# ── cube_value / cube_member COM write (mocked) ───────────────────────────────
+
+class TestCubeValueCOMWrite:
+    """cube_value: asserts cell.Formula is set to exact built string.
+
+    The COM layer is fully mocked — no Excel needed. Error-marker read-back
+    triggers ToolError. Normal read-back returns the result dict.
+
+    CAVEAT (from dispatcher docstring): live numeric resolution requires an
+    existing in-workbook Data Model. This is not unit-testable headless.
+    """
+
+    def _make_session_and_cell(self, text_return: str):
+        """Return (mock_session, mock_cell) pair with cell.Text = text_return."""
+        mock_session = make_mock_session()
+        mock_app = MagicMock()
+        mock_ws = MagicMock()
+        mock_cell = MagicMock()
+        mock_cell.Value = 1350
+        mock_cell.Text = text_return
+        mock_cell.Formula = None  # will be set by the domain helper
+        mock_ws.Range.return_value = mock_cell
+        mock_session.get_app.return_value = mock_app
+        mock_session.get_sheet.return_value = mock_ws
+        return mock_session, mock_cell
+
+    def _action(self, mock_session, **kwargs):
+        with patch("thepexcel_mcp.domains.datamodel._session", mock_session):
+            from thepexcel_mcp.domains.datamodel import datamodel_action
+            return datamodel_action(**kwargs)
+
+    def test_cell_formula_set_to_built_string(self):
+        mock_session, mock_cell = self._make_session_and_cell("1,350")
+        result = self._action(
+            mock_session,
+            action="cube_value",
+            target_cell="B2",
+            measure="Total Sales",
+        )
+        # VERIFY-EFFECT: cell.Formula must be the exact CUBEVALUE string
+        expected = '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]")'
+        assert mock_cell.Formula == expected
+        assert result["formula"] == expected
+        assert result["cell"] == "B2"
+
+    def test_cell_formula_with_members(self):
+        mock_session, mock_cell = self._make_session_and_cell("250")
+        self._action(
+            mock_session,
+            action="cube_value",
+            target_cell="C3",
+            measure="Total Sales",
+            members=["[Products].[Category].[Bikes]"],
+        )
+        expected = (
+            '=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Total Sales]",'
+            '"[Products].[Category].[Bikes]")'
+        )
+        assert mock_cell.Formula == expected
+
+    def test_error_marker_name_raises(self):
+        mock_session, mock_cell = self._make_session_and_cell("#NAME?")
+        with pytest.raises(ToolError, match="#NAME"):
+            self._action(
+                mock_session,
+                action="cube_value",
+                target_cell="B2",
+                measure="NoSuchMeasure",
+            )
+
+    def test_error_marker_getting_data_raises(self):
+        mock_session, mock_cell = self._make_session_and_cell("#GETTING_DATA")
+        with pytest.raises(ToolError, match="GETTING_DATA"):
+            self._action(
+                mock_session,
+                action="cube_value",
+                target_cell="B2",
+                measure="Total Sales",
+            )
+
+    def test_missing_target_cell_raises(self):
+        mock_session, _ = self._make_session_and_cell("1,350")
+        with pytest.raises(ToolError, match="requires 'target_cell'"):
+            self._action(mock_session, action="cube_value", measure="Total Sales")
+
+    def test_missing_measure_raises(self):
+        mock_session, _ = self._make_session_and_cell("1,350")
+        with pytest.raises(ToolError, match="requires 'measure'"):
+            self._action(mock_session, action="cube_value", target_cell="B2")
+
+
+class TestCubeMemberCOMWrite:
+    """cube_member: asserts cell.Formula is set to exact built CUBEMEMBER string."""
+
+    def _make_session_and_cell(self, text_return: str):
+        mock_session = make_mock_session()
+        mock_app = MagicMock()
+        mock_ws = MagicMock()
+        mock_cell = MagicMock()
+        mock_cell.Value = "Bikes"
+        mock_cell.Text = text_return
+        mock_cell.Formula = None
+        mock_ws.Range.return_value = mock_cell
+        mock_session.get_app.return_value = mock_app
+        mock_session.get_sheet.return_value = mock_ws
+        return mock_session, mock_cell
+
+    def _action(self, mock_session, **kwargs):
+        with patch("thepexcel_mcp.domains.datamodel._session", mock_session):
+            from thepexcel_mcp.domains.datamodel import datamodel_action
+            return datamodel_action(**kwargs)
+
+    def test_cell_formula_set_to_built_string(self):
+        mock_session, mock_cell = self._make_session_and_cell("Bikes")
+        result = self._action(
+            mock_session,
+            action="cube_member",
+            target_cell="A1",
+            member_expression="[Products].[Category].[Bikes]",
+        )
+        expected = (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Products].[Category].[Bikes]")'
+        )
+        assert mock_cell.Formula == expected
+        assert result["formula"] == expected
+        assert result["cell"] == "A1"
+
+    def test_cell_formula_with_caption(self):
+        mock_session, mock_cell = self._make_session_and_cell("Bikes")
+        self._action(
+            mock_session,
+            action="cube_member",
+            target_cell="A1",
+            member_expression="[Products].[Category].[Bikes]",
+            caption="Bikes",
+        )
+        expected = (
+            '=CUBEMEMBER("ThisWorkbookDataModel","[Products].[Category].[Bikes]","Bikes")'
+        )
+        assert mock_cell.Formula == expected
+
+    def test_error_marker_raises(self):
+        mock_session, mock_cell = self._make_session_and_cell("#NAME?")
+        with pytest.raises(ToolError, match="#NAME"):
+            self._action(
+                mock_session,
+                action="cube_member",
+                target_cell="A1",
+                member_expression="[Bad].[Member].[X]",
+            )
+
+    def test_missing_target_cell_raises(self):
+        mock_session, _ = self._make_session_and_cell("Bikes")
+        with pytest.raises(ToolError, match="requires 'target_cell'"):
+            self._action(
+                mock_session,
+                action="cube_member",
+                member_expression="[Products].[Category].[Bikes]",
+            )
+
+    def test_missing_member_expression_raises(self):
+        mock_session, _ = self._make_session_and_cell("Bikes")
+        with pytest.raises(ToolError, match="requires 'member_expression'"):
+            self._action(mock_session, action="cube_member", target_cell="A1")
+
+
+# ── Calculated column / table guard ──────────────────────────────────────────
+
+class TestCalcColumnGuard:
+    """add_calculated_column / add_calculated_table raise informative ToolErrors.
+
+    Pure Python — no COM call, no Excel. Verified against constants from
+    scratch/tier3/exp_calc_column.py (design_confirmation 5/5 checks).
+    """
+
+    def _action(self, **kwargs):
+        mock_session = make_mock_session()
+        with patch("thepexcel_mcp.domains.datamodel._session", mock_session):
+            from thepexcel_mcp.domains.datamodel import datamodel_action
+            return datamodel_action(**kwargs)
+
+    def test_add_calculated_column_raises(self):
+        with pytest.raises(ToolError) as exc_info:
+            self._action(action="add_calculated_column")
+        msg = str(exc_info.value)
+        assert "READ-ONLY" in msg
+        assert "Power Query" in msg
+        assert "add_measure" in msg
+
+    def test_add_calculated_table_raises(self):
+        with pytest.raises(ToolError) as exc_info:
+            self._action(action="add_calculated_table")
+        msg = str(exc_info.value)
+        assert "Power BI" in msg
+        assert "Analysis Services" in msg
+
+    def test_unknown_action_lists_new_names(self):
+        with pytest.raises(ToolError) as exc_info:
+            self._action(action="nonexistent_xyz")
+        msg = str(exc_info.value)
+        assert "cube_value" in msg
+        assert "cube_member" in msg
+        assert "cube_formula" in msg
+        assert "add_calculated_column" in msg
+        assert "add_calculated_table" in msg

@@ -39,4 +39,5 @@ desktop.ini
 
 # Scratch / generated artifacts
 tmp/
+scratch/
 samples/*.xlsx

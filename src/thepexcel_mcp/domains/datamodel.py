@@ -22,12 +22,103 @@ without creating a worksheet output table.
 
 from __future__ import annotations
 
+import time
 import pythoncom
 from fastmcp.exceptions import ToolError
 
 from ..session import ExcelSession
 
 _session = ExcelSession()
+
+
+# ── Cube-formula constants & builders (pure Python, no COM) ───────────────────
+#
+# Verified offline in scratch/tier3/exp_cube_formula.py (10/10 exact-match).
+# Copy is VERBATIM (logic identical) — only names are prefixed with "_" for
+# module-private convention.
+
+DEFAULT_CONNECTION = "ThisWorkbookDataModel"
+
+
+def _xl_quote(s: str) -> str:
+    """Quote a Python string as an Excel string literal (double inner quotes)."""
+    return '"' + s.replace('"', '""') + '"'
+
+
+def _normalize_measure(measure: str) -> str:
+    """Friendly measure name -> MDX measure expression.
+
+    'Total Sales'              -> '[Measures].[Total Sales]'
+    '[Measures].[Total Sales]' -> unchanged (already MDX)
+    """
+    m = measure.strip()
+    if m.startswith("["):
+        return m
+    return f"[Measures].[{m}]"
+
+
+def _build_cubevalue(measure: str, members=None, connection: str = DEFAULT_CONNECTION) -> str:
+    """Build a =CUBEVALUE(...) formula string.
+
+    measure    : friendly or MDX measure name (the value to aggregate)
+    members    : optional list of MDX member-expression strings (slicers/tuples)
+    connection : data-model connection literal (default ThisWorkbookDataModel)
+    """
+    members = members or []
+    args = [_xl_quote(connection), _xl_quote(_normalize_measure(measure))]
+    args += [_xl_quote(m) for m in members]
+    return "=CUBEVALUE(" + ",".join(args) + ")"
+
+
+def _build_cubemember(member_expression: str, caption: str | None = None,
+                      connection: str = DEFAULT_CONNECTION) -> str:
+    """Build a =CUBEMEMBER(...) formula string.
+
+    member_expression : full MDX member, e.g. '[Products].[Category].[Bikes]'
+    caption           : optional display caption (3rd arg)
+    """
+    args = [_xl_quote(connection), _xl_quote(member_expression)]
+    if caption is not None:
+        args.append(_xl_quote(caption))
+    return "=CUBEMEMBER(" + ",".join(args) + ")"
+
+
+# ── DAX calc-column / calc-table guard messages ───────────────────────────────
+#
+# Confirmed against Microsoft Learn in scratch/tier3/exp_calc_column.py.
+# ModelTableColumns has NO .Add; ModelTable object is read-only.
+
+CALC_COLUMN_ERROR_MSG = (
+    "DAX calculated columns cannot be added to the Excel Data Model through "
+    "automation. Excel's object model exposes ModelTableColumns as READ-ONLY "
+    "(no .Add method; the ModelTable object 'cannot be created or edited through "
+    "the object model' per Microsoft Learn) — only measures (ModelMeasures.Add) "
+    "and relationships (ModelRelationships.Add) can be created programmatically.\n"
+    "Workarounds:\n"
+    "  1. Add the column UPSTREAM in Power Query as a custom column, then reload "
+    "to the model: excel_powerquery(action='create'|'update', ...) with an added "
+    "custom-column step, then excel_datamodel(action='add_table', source_type='query', ...) "
+    "(or load_to_datamodel). The new column then appears in the model table.\n"
+    "  2. If you only need an AGGREGATION (sum/avg/count/...), use a DAX measure "
+    "instead: excel_datamodel(action='add_measure', measure_name=..., table=..., formula=...).\n"
+    "  3. For a true row-level DAX calculated column you must use the Power Pivot "
+    "window UI (Power Pivot > Manage > add column) or Power BI / Analysis Services — "
+    "there is no Excel COM API for it."
+)
+
+CALC_TABLE_ERROR_MSG = (
+    "DAX calculated tables are NOT supported in the Excel Data Model — they exist "
+    "only in Power BI and Analysis Services (tabular). Excel's object model marks "
+    "the ModelTable object read-only and the ModelTables collection has no .Add "
+    "method, so no calculated table (e.g. via CALCULATETABLE/SUMMARIZE/UNION) can "
+    "be created from Excel by any means, UI or COM.\n"
+    "Workarounds:\n"
+    "  1. Build the derived table UPSTREAM in Power Query (group/append/merge), "
+    "then load it to the model: excel_powerquery(action='create', ...) + "
+    "excel_datamodel(action='add_table', source_type='query', ...).\n"
+    "  2. Move the modeling to Power BI Desktop if you genuinely need DAX "
+    "calculated tables."
+)
 
 
 # ── Format type → Model property name ─────────────────────────────────────────
@@ -91,6 +182,15 @@ def datamodel_action(
     new_formula: str | None = None,
     new_format_type: str | None = None,
     new_description: str | None = None,
+    # cube_formula / cube_value / cube_member
+    measure: str | None = None,
+    members: list | None = None,
+    kind: str = "cubevalue",
+    member_expression: str | None = None,
+    caption: str | None = None,
+    connection: str = DEFAULT_CONNECTION,
+    target_cell: str | None = None,
+    sheet: str | None = None,
 ) -> dict:
     """Dispatch a Data Model / DAX action.
 
@@ -124,6 +224,33 @@ def datamodel_action(
         Delete a measure by name. Requires ``measure_name``.
     refresh
         Model.Refresh() — refreshes all data sources and reprocesses.
+    cube_formula
+        BUILD ONLY (pure Python, no COM). Returns {formula: <string>} without
+        writing to any cell. Use ``kind`` to select the formula type:
+        - kind="cubevalue" (default): requires ``measure``; optional ``members``
+          (list of MDX member-expression strings) and ``connection``.
+        - kind="cubemember": requires ``member_expression``; optional ``caption``
+          and ``connection``.
+    cube_value
+        Write a =CUBEVALUE() formula to ``target_cell`` and resolve async.
+        Requires ``target_cell`` and ``measure``. Optional: ``members``,
+        ``connection``, ``sheet``, ``workbook``.
+        CAVEAT: numeric resolution requires an existing in-workbook Data Model
+        with the named measure. The async OLAP resolution
+        (CalculateUntilAsyncQueriesDone) depends on Excel Desktop's message pump
+        running — headless automation may return #GETTING_DATA or timeout.
+    cube_member
+        Write a =CUBEMEMBER() formula to ``target_cell`` and resolve async.
+        Requires ``target_cell`` and ``member_expression``. Optional: ``caption``,
+        ``connection``, ``sheet``, ``workbook``.
+        Same Desktop-model caveat as cube_value.
+    add_calculated_column
+        NOT SUPPORTED — raises ToolError with workarounds. Excel's COM object
+        model exposes ModelTableColumns as READ-ONLY; no calculated column can be
+        added programmatically.
+    add_calculated_table
+        NOT SUPPORTED — raises ToolError with workarounds. DAX calculated tables
+        exist only in Power BI / Analysis Services, not in the Excel Data Model.
     """
     # Validate args (pure Python) before entering the COM worker
     if action == "info":
@@ -168,10 +295,34 @@ def datamodel_action(
         return _session.run_com(_delete_measure, measure_name, workbook)
     if action == "refresh":
         return _session.run_com(_refresh, workbook)
+    if action == "cube_formula":
+        kind_lower = (kind or "cubevalue").lower().strip()
+        if kind_lower == "cubevalue":
+            _require(measure, "measure", action)
+            return {"formula": _build_cubevalue(measure, members, connection)}
+        if kind_lower == "cubemember":
+            _require(member_expression, "member_expression", action)
+            return {"formula": _build_cubemember(member_expression, caption, connection)}
+        raise ToolError(
+            f"cube_formula kind='{kind}' invalid. Valid: cubevalue, cubemember."
+        )
+    if action == "cube_value":
+        _require(target_cell, "target_cell", action)
+        _require(measure, "measure", action)
+        return _session.run_com(_cube_write_value, target_cell, measure, members, connection, sheet, workbook)
+    if action == "cube_member":
+        _require(target_cell, "target_cell", action)
+        _require(member_expression, "member_expression", action)
+        return _session.run_com(_cube_write_member, target_cell, member_expression, caption, connection, sheet, workbook)
+    if action == "add_calculated_column":
+        raise ToolError(CALC_COLUMN_ERROR_MSG)
+    if action == "add_calculated_table":
+        raise ToolError(CALC_TABLE_ERROR_MSG)
     raise ToolError(
         f"Unknown action '{action}'. Valid: info, list_tables, add_table, "
         "list_relationships, add_relationship, delete_relationship, "
-        "list_measures, add_measure, update_measure, delete_measure, refresh."
+        "list_measures, add_measure, update_measure, delete_measure, refresh, "
+        "cube_formula, cube_value, cube_member, add_calculated_column, add_calculated_table."
     )
 
 
@@ -305,6 +456,94 @@ def _apply_format_options(fmt_obj, decimal_places: int | None, use_thousand_sep:
             fmt_obj.UseThousandSeparator = use_thousand_sep
         except Exception:
             pass
+
+
+# ── Cube write helpers ─────────────────────────────────────────────────────────
+
+_CUBE_ERROR_MARKERS = ("#NAME?", "#GETTING_DATA", "#N/A", "#VALUE!", "#REF!")
+
+
+def _cube_resolve_async(app) -> None:
+    """Resolve pending OLAP/OLEDB async queries (#GETTING_DATA -> value).
+
+    Primary: app.CalculateUntilAsyncQueriesDone() (Application method, no args).
+    Fallback: PumpWaitingMessages + Calculate loop (40 × 50 ms = 2 s).
+    """
+    try:
+        app.CalculateUntilAsyncQueriesDone()
+    except Exception:
+        for _ in range(40):
+            pythoncom.PumpWaitingMessages()
+            try:
+                app.Calculate()
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+
+def _cube_write_value(
+    target_cell: str,
+    measure: str,
+    members,
+    connection: str,
+    sheet: str | None,
+    workbook: str | None,
+) -> dict:
+    """Write =CUBEVALUE() to target_cell and verify async resolution.
+
+    VERIFY-EFFECT: reads back cell.Text; raises ToolError if an error marker
+    is present (e.g. #NAME? means the measure or Data Model doesn't exist).
+    """
+    formula = _build_cubevalue(measure, members, connection)
+    app = _session.get_app()
+    ws = _session.get_sheet(sheet, workbook)
+    cell = ws.Range(target_cell)
+    cell.Formula = formula
+    _cube_resolve_async(app)
+    got_text = str(cell.Text)
+    if any(mk in got_text for mk in _CUBE_ERROR_MARKERS):
+        raise ToolError(
+            f"CUBEVALUE formula was written ({formula!r}) but Excel returned "
+            f"an error: {got_text!r}. "
+            "Ensure the Data Model exists with the named measure and that "
+            "the workbook is saved and connected to the model."
+        )
+    return {
+        "formula": formula,
+        "value": cell.Value,
+        "text": got_text,
+        "cell": target_cell,
+    }
+
+
+def _cube_write_member(
+    target_cell: str,
+    member_expression: str,
+    caption: str | None,
+    connection: str,
+    sheet: str | None,
+    workbook: str | None,
+) -> dict:
+    """Write =CUBEMEMBER() to target_cell and verify async resolution."""
+    formula = _build_cubemember(member_expression, caption, connection)
+    app = _session.get_app()
+    ws = _session.get_sheet(sheet, workbook)
+    cell = ws.Range(target_cell)
+    cell.Formula = formula
+    _cube_resolve_async(app)
+    got_text = str(cell.Text)
+    if any(mk in got_text for mk in _CUBE_ERROR_MARKERS):
+        raise ToolError(
+            f"CUBEMEMBER formula was written ({formula!r}) but Excel returned "
+            f"an error: {got_text!r}. "
+            "Ensure the Data Model exists with the named member expression."
+        )
+    return {
+        "formula": formula,
+        "value": cell.Value,
+        "text": got_text,
+        "cell": target_cell,
+    }
 
 
 # ── Action implementations ─────────────────────────────────────────────────────

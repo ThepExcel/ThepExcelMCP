@@ -7,12 +7,144 @@ preserved verbatim — it took real debugging to get right (see PoC excel_com.py
 
 from __future__ import annotations
 
+import re
+
 from fastmcp.exceptions import ToolError
 
 from ..analysis.pq_analyzer import analyze_mcode
 from ..session import ExcelSession
 
 _session = ExcelSession()
+
+
+# ── Parameter query pure-Python helpers ───────────────────────────────────────
+# Logic verified in scratch/tier3/exp_pq_params.py (9/9 pure-Python + live COM).
+# Copied VERBATIM from that file; only renamed to module-private _names.
+
+def _m_escape_text(value: str) -> str:
+    """Escape a Python string into an M text literal body (without outer quotes).
+
+    M text literals escape a double-quote by doubling it: "" inside the string.
+    """
+    return value.replace('"', '""')
+
+
+def _split_literal_and_meta(formula: str) -> tuple[str, str]:
+    """Split a parameter formula into (leading_literal, meta_part).
+
+    Splits by structure, NOT by searching for ' meta ' as a substring, so text
+    values that happen to contain the word ' meta ' are handled correctly.
+
+    - Quoted literal: scan forward past the closing quote (doubled "" = escaped
+      quote inside the string; keep scanning). The literal is everything up to
+      and including the closing quote.
+    - Bare number literal: token up to the first whitespace.
+
+    Returns (literal_token, remainder_including_leading_space_and_meta_keyword).
+    Raises ValueError if no meta record follows (caller treats as non-parameter).
+    """
+    f = formula.lstrip()
+    if f.startswith('"'):
+        # Walk the quoted text literal character by character
+        i = 1  # start after opening quote
+        while i < len(f):
+            if f[i] == '"':
+                # Peek ahead: doubled quote = escaped quote inside string
+                if i + 1 < len(f) and f[i + 1] == '"':
+                    i += 2  # consume both and continue inside string
+                    continue
+                else:
+                    # Closing quote found
+                    literal = f[:i + 1]
+                    meta_part = f[i + 1:]  # everything after closing quote
+                    if not re.search(r"\bmeta\b", meta_part):
+                        raise ValueError("not a parameter formula (no meta record after quoted literal)")
+                    return literal, meta_part
+            i += 1
+        raise ValueError("not a parameter formula (unterminated quoted literal)")
+    else:
+        # Bare number literal — token up to first whitespace
+        m = re.search(r"\s", f)
+        if not m:
+            raise ValueError("not a parameter formula (no whitespace after literal)")
+        literal = f[:m.start()]
+        meta_part = f[m.start():]
+        if not re.search(r"\bmeta\b", meta_part):
+            raise ValueError("not a parameter formula (no meta record after number literal)")
+        return literal, meta_part
+
+
+def _build_parameter_m(value, ptype: str | None = None, required: bool = True) -> str:
+    """Assemble the M for a parameter query.
+
+    ptype: "Text" | "Number" | None (None → inferred from Python type).
+    Text values are emitted quoted+escaped; Number values bare.
+    """
+    if ptype is None:
+        ptype = "Number" if isinstance(value, (int, float)) and not isinstance(value, bool) else "Text"
+    if ptype == "Text":
+        literal = '"' + _m_escape_text(str(value)) + '"'
+    else:  # Number (or any non-text scalar) → bare literal
+        literal = repr(value) if isinstance(value, float) else str(value)
+    return (
+        f"{literal} meta "
+        f"[IsParameterQuery=true, Type=\"{ptype}\", IsParameterQueryRequired={str(required).lower()}]"
+    )
+
+
+# Detection: a query is a parameter if its formula contains IsParameterQuery=true
+_RE_IS_PARAM = re.compile(r"IsParameterQuery\s*=\s*true", re.IGNORECASE)
+# A query is a function if its body starts with a parameter list "(...) =>"
+_RE_FUNC_SIG = re.compile(r"^\s*\([^)]*\)\s*(as\s+[^=]+?)?=>", re.DOTALL)
+_RE_TYPE_FIELD = re.compile(r"Type\s*=\s*\"([^\"]*)\"")
+
+
+def _is_parameter(formula: str) -> bool:
+    return bool(_RE_IS_PARAM.search(formula or ""))
+
+
+def _is_function(formula: str) -> bool:
+    f = (formula or "").lstrip()
+    return bool(_RE_FUNC_SIG.match(f))
+
+
+def _parse_parameter(formula: str) -> dict:
+    """Return {value, type, raw_literal} parsed from a parameter formula."""
+    try:
+        raw, _meta_part = _split_literal_and_meta(formula.lstrip())
+    except ValueError:
+        # Fallback: treat entire formula (stripped) as the raw literal
+        raw = formula.strip()
+    tmatch = _RE_TYPE_FIELD.search(formula)
+    ptype = tmatch.group(1) if tmatch else None
+    # decode the literal back to a Python value (best-effort, for display)
+    if raw.startswith('"') and raw.endswith('"'):
+        value = raw[1:-1].replace('""', '"')
+    else:
+        try:
+            value = float(raw) if ("." in raw or "e" in raw.lower()) else int(raw)
+        except ValueError:
+            value = raw
+    return {"value": value, "type": ptype, "raw_literal": raw}
+
+
+def _set_parameter_formula(old_formula: str, new_value, ptype: str | None = None) -> str:
+    """Produce a new formula with the literal replaced but meta record preserved."""
+    try:
+        _old_literal, meta_part = _split_literal_and_meta(old_formula.lstrip())
+    except ValueError as exc:
+        raise ValueError(f"not a parameter formula (no meta record): {exc}") from exc
+
+    if ptype is None:
+        tmatch = _RE_TYPE_FIELD.search(old_formula)
+        ptype = tmatch.group(1) if tmatch else None
+    if ptype == "Text":
+        literal = '"' + _m_escape_text(str(new_value)) + '"'
+    else:
+        literal = repr(new_value) if isinstance(new_value, float) else str(new_value)
+    # Normalize to exactly one leading space before "meta"
+    meta_part = " " + meta_part.lstrip()
+    return f"{literal}{meta_part}"
 
 
 def powerquery_action(
@@ -30,6 +162,10 @@ def powerquery_action(
     raw_formula: str | None = None,
     # load_to_datamodel (Phase 2)
     load_to_datamodel: bool = False,
+    # parameter management (Tier-3)
+    value=None,
+    param_type: str | None = None,
+    required: bool = True,
 ) -> dict:
     """Dispatch a Power Query action.
 
@@ -63,6 +199,20 @@ def powerquery_action(
         Analyze M code from an existing query for anti-patterns. Requires ``name``.
     analyze_raw
         Analyze M code provided directly (no Excel needed). Requires ``raw_formula``.
+    create_parameter
+        Create a new Power Query parameter (a query whose formula is a scalar meta
+        record). Requires ``name`` and ``value``. Optional ``param_type`` ("Text" |
+        "Number"; inferred from Python type when omitted). ``required`` defaults True.
+    get_parameter
+        Return parsed {value, type} for a parameter query. Requires ``name``.
+        Raises ToolError if the query exists but is not a parameter.
+    set_parameter
+        Update the scalar value of an existing parameter query. Requires ``name``
+        and ``value``. Optionally pass ``param_type`` to coerce the type; otherwise
+        the existing type in the meta record is preserved.
+    list_parameters
+        List all parameter queries in the workbook (those with IsParameterQuery=true
+        in their formula). Returns [{name, value, type}].
     """
     # Validate args (pure Python) before entering the COM worker
     # analyze_raw is pure Python (no COM) — skip run_com
@@ -98,9 +248,25 @@ def powerquery_action(
     if action == "analyze":
         _require(name, "name", action)
         return _session.run_com(_analyze, name, workbook)
+    if action == "create_parameter":
+        _require(name, "name", action)
+        if value is None:
+            raise ToolError(f"action='create_parameter' requires 'value'.")
+        return _session.run_com(_create_parameter, name, value, param_type, required, workbook)
+    if action == "get_parameter":
+        _require(name, "name", action)
+        return _session.run_com(_get_parameter, name, workbook)
+    if action == "set_parameter":
+        _require(name, "name", action)
+        if value is None:
+            raise ToolError(f"action='set_parameter' requires 'value'.")
+        return _session.run_com(_set_parameter, name, value, param_type, workbook)
+    if action == "list_parameters":
+        return _session.run_com(_list_parameters, workbook)
     raise ToolError(
         f"Unknown action '{action}'. Valid: list, get, create, update, delete, "
-        "refresh, refresh_all, load_to_table, load_to_datamodel, analyze, analyze_raw."
+        "refresh, refresh_all, load_to_table, load_to_datamodel, analyze, analyze_raw, "
+        "create_parameter, get_parameter, set_parameter, list_parameters."
     )
 
 
@@ -153,10 +319,13 @@ def _list(workbook: str | None) -> dict:
     queries = []
     for i in range(1, wb.Queries.Count + 1):
         q = wb.Queries.Item(i)
+        formula = q.Formula
         entry = {
             "name": q.Name,
             "description": q.Description or "",
-            "line_count": q.Formula.count("\n") + 1,
+            "line_count": formula.count("\n") + 1,
+            "is_parameter": _is_parameter(formula),
+            "is_function": _is_function(formula),
         }
         if q.Name in model_conn_names:
             entry["model_connection"] = True
@@ -414,6 +583,126 @@ def _load_to_datamodel(name: str, workbook: str | None) -> dict:
         "connection": conn_name,
         "model_table_count": model_table_count,
     }
+
+
+def _create_parameter(
+    name: str,
+    value,
+    param_type: str | None,
+    required: bool,
+    workbook: str | None,
+) -> dict:
+    wb = _session.get_workbook(workbook)
+    # Guard duplicate (mirror _create)
+    for i in range(1, wb.Queries.Count + 1):
+        if wb.Queries.Item(i).Name == name:
+            raise ToolError(
+                f"Query '{name}' already exists. Use action='set_parameter' to update its value."
+            )
+    formula = _build_parameter_m(value, param_type, required)
+    try:
+        q = wb.Queries.Add(name, formula)
+    except Exception as e:
+        raise _session.wrap(e, f"Create parameter '{name}' failed")
+    # Verify-EFFECT: read back and confirm the meta record survived the round-trip
+    actual = q.Formula
+    if not _is_parameter(actual):
+        raise ToolError(
+            f"create_parameter verify-effect failed: formula written but IsParameterQuery "
+            f"not detected in read-back. Got: {actual!r}"
+        )
+    parsed = _parse_parameter(actual)
+    return {
+        "created_parameter": name,
+        "formula": actual,
+        "value": parsed["value"],
+        "type": parsed["type"],
+    }
+
+
+def _get_parameter(name: str, workbook: str | None) -> dict:
+    wb = _session.get_workbook(workbook)
+    q = _query_obj(wb, name)
+    if not _is_parameter(q.Formula):
+        raise ToolError(
+            f"'{name}' is not a parameter query (IsParameterQuery=true not found in formula). "
+            f"Use action='get' to retrieve raw M code."
+        )
+    parsed = _parse_parameter(q.Formula)
+    return {
+        "name": name,
+        "value": parsed["value"],
+        "type": parsed["type"],
+        "raw_literal": parsed["raw_literal"],
+        "formula": q.Formula,
+    }
+
+
+def _set_parameter(
+    name: str,
+    value,
+    param_type: str | None,
+    workbook: str | None,
+) -> dict:
+    wb = _session.get_workbook(workbook)
+    q = _query_obj(wb, name)
+    if not _is_parameter(q.Formula):
+        raise ToolError(
+            f"'{name}' is not a parameter query. Use action='update' to rewrite arbitrary M code."
+        )
+    new_formula = _set_parameter_formula(q.Formula, value, param_type)
+    try:
+        q.Formula = new_formula
+    except Exception as e:
+        raise _session.wrap(e, f"set_parameter '{name}': Formula write failed")
+    # Verify-EFFECT: read back and compare against the USER-REQUESTED value,
+    # not a re-parse of new_formula (a consistent round-trip bug would pass that check).
+    actual = q.Formula
+    parsed = _parse_parameter(actual)
+    readback_val = parsed["value"]
+    # Numeric coercion: compare as numbers to avoid float-repr mismatches
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if abs(float(readback_val) - float(value)) > 1e-12:
+                raise ToolError(
+                    f"set_parameter verify-effect mismatch for '{name}': "
+                    f"requested {value!r}, read back {readback_val!r} (formula: {actual!r})"
+                )
+        else:
+            if str(readback_val) != str(value):
+                raise ToolError(
+                    f"set_parameter verify-effect mismatch for '{name}': "
+                    f"requested {value!r}, read back {readback_val!r} (formula: {actual!r})"
+                )
+    except ToolError:
+        raise
+    except Exception:
+        # Fallback: string comparison (e.g. type coercion edge case)
+        if str(readback_val) != str(value):
+            raise ToolError(
+                f"set_parameter verify-effect mismatch for '{name}': "
+                f"requested {value!r}, read back {readback_val!r} (formula: {actual!r})"
+            )
+    return {
+        "set_parameter": name,
+        "formula": actual,
+        "value": parsed["value"],
+    }
+
+
+def _list_parameters(workbook: str | None) -> dict:
+    wb = _session.get_workbook(workbook)
+    params = []
+    for i in range(1, wb.Queries.Count + 1):
+        q = wb.Queries.Item(i)
+        if _is_parameter(q.Formula):
+            parsed = _parse_parameter(q.Formula)
+            params.append({
+                "name": q.Name,
+                "value": parsed["value"],
+                "type": parsed["type"],
+            })
+    return {"parameters": params, "count": len(params)}
 
 
 def _get_warnings(q) -> list[str]:

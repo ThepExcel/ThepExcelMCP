@@ -232,6 +232,9 @@ def excel_powerquery(
     new_name: str | None = None,
     sheet_name: str | None = None,
     raw_formula: str | None = None,
+    value=None,
+    param_type: str | None = None,
+    required: bool = True,
 ) -> dict:
     """Manage Power Query (M code) queries in Excel.
 
@@ -240,7 +243,8 @@ def excel_powerquery(
     action : str
         One of: ``list``, ``get``, ``create``, ``update``, ``delete``,
         ``refresh``, ``refresh_all``, ``load_to_table``, ``load_to_datamodel``,
-        ``analyze``, ``analyze_raw``.
+        ``analyze``, ``analyze_raw``, ``create_parameter``, ``get_parameter``,
+        ``set_parameter``, ``list_parameters``.
     name : str, optional
         Query name. Required for most actions.
     workbook : str, optional
@@ -255,6 +259,14 @@ def excel_powerquery(
         Target sheet name for ``load_to_table``. Defaults to query name (max 31 chars).
     raw_formula : str, optional
         M code string for ``analyze_raw`` (no Excel connection required).
+    value : int | float | str, optional
+        Scalar value for the PQ parameter (Number or Text). Required for
+        ``create_parameter`` and ``set_parameter``.
+    param_type : str, optional
+        Force the M type string: ``"Text"`` or ``"Number"``. When omitted, inferred
+        from the Python type of ``value`` (int/float → Number, str → Text).
+    required : bool, optional
+        Sets ``IsParameterQueryRequired`` in the meta record. Defaults ``True``.
 
     Actions
     -------
@@ -298,6 +310,23 @@ def excel_powerquery(
     analyze_raw
         Analyzes M code provided directly — no Excel connection needed.
         Example: ``excel_powerquery(action="analyze_raw", raw_formula="let ... in ...")``
+    create_parameter
+        Creates a PQ parameter query (scalar meta record). Requires ``name`` and
+        ``value``. Optional ``param_type`` (``"Text"`` | ``"Number"``); inferred
+        when omitted.
+        Example: ``excel_powerquery(action="create_parameter", name="MaxRows", value=1000)``
+    get_parameter
+        Returns parsed ``{value, type}`` for a parameter query. Requires ``name``.
+        Raises ToolError if the query is not a parameter.
+        Example: ``excel_powerquery(action="get_parameter", name="MaxRows")``
+    set_parameter
+        Updates the scalar value of an existing parameter query. Requires ``name``
+        and ``value``. Pass ``param_type`` to coerce; otherwise existing type is kept.
+        Example: ``excel_powerquery(action="set_parameter", name="MaxRows", value=500)``
+    list_parameters
+        Lists all parameter queries in the workbook (``IsParameterQuery=true``).
+        Returns ``[{name, value, type}]``.
+        Example: ``excel_powerquery(action="list_parameters")``
     """
     return powerquery_action(
         action,
@@ -308,6 +337,9 @@ def excel_powerquery(
         new_name=new_name,
         sheet_name=sheet_name,
         raw_formula=raw_formula,
+        value=value,
+        param_type=param_type,
+        required=required,
     )
 
 
@@ -608,6 +640,15 @@ def excel_datamodel(
     new_formula: str | None = None,
     new_format_type: str | None = None,
     new_description: str | None = None,
+    # cube_formula / cube_value / cube_member
+    target_cell: str | None = None,
+    measure: str | None = None,
+    members: list | None = None,
+    kind: str = "cubevalue",
+    member_expression: str | None = None,
+    caption: str | None = None,
+    connection: str = "ThisWorkbookDataModel",
+    sheet: str | None = None,
 ) -> dict:
     """Manage the Excel Data Model (Power Pivot) — tables, relationships, and DAX measures.
 
@@ -616,7 +657,9 @@ def excel_datamodel(
     action : str
         One of: ``info``, ``list_tables``, ``add_table``, ``list_relationships``,
         ``add_relationship``, ``delete_relationship``, ``list_measures``,
-        ``add_measure``, ``update_measure``, ``delete_measure``, ``refresh``.
+        ``add_measure``, ``update_measure``, ``delete_measure``, ``refresh``,
+        ``cube_formula``, ``cube_value``, ``cube_member``,
+        ``add_calculated_column``, ``add_calculated_table``.
     workbook : str, optional
         Workbook name. Uses active workbook when omitted.
     source_type : str, optional
@@ -655,6 +698,27 @@ def excel_datamodel(
         New format type for ``update_measure``.
     new_description : str, optional
         New description for ``update_measure``.
+    target_cell : str, optional
+        Cell address (e.g. ``"B2"``) to write the formula into for
+        ``cube_value`` / ``cube_member``.
+    measure : str, optional
+        Friendly or MDX measure name for ``cube_formula`` (kind=cubevalue)
+        and ``cube_value``.
+    members : list, optional
+        Optional list of MDX member-expression strings (slicers/tuples) for
+        CUBEVALUE (``cube_formula`` / ``cube_value``).
+    kind : str, optional
+        Formula kind for ``cube_formula``: ``"cubevalue"`` (default) or
+        ``"cubemember"``.
+    member_expression : str, optional
+        Full MDX member expression for ``cube_formula`` (kind=cubemember) and
+        ``cube_member``.
+    caption : str, optional
+        Optional display caption for CUBEMEMBER (3rd argument).
+    connection : str, optional
+        Data-model connection literal. Defaults to ``"ThisWorkbookDataModel"``.
+    sheet : str, optional
+        Sheet name for ``cube_value`` / ``cube_member``; ``None`` = active sheet.
 
     Actions
     -------
@@ -706,6 +770,35 @@ def excel_datamodel(
     refresh
         Refresh all Data Model data sources (Model.Refresh()).
         Example: ``excel_datamodel(action="refresh")``
+    cube_formula
+        Build and return a CUBEVALUE or CUBEMEMBER formula string (pure Python,
+        no COM). Use ``kind`` to select: ``"cubevalue"`` (default) or
+        ``"cubemember"``. For cubevalue, requires ``measure``; optional ``members``
+        list of MDX tuples. For cubemember, requires ``member_expression``; optional
+        ``caption``.
+        Example: ``excel_datamodel(action="cube_formula", kind="cubevalue",
+        measure="[Measures].[Total Sales]",
+        members=["[Date].[Year].&[2024]"])``
+    cube_value
+        Write a CUBEVALUE formula to a cell and return the resolved value.
+        Requires ``target_cell`` and ``measure``; optional ``members``, ``sheet``,
+        ``connection``.
+        Example: ``excel_datamodel(action="cube_value", target_cell="B2",
+        measure="[Measures].[Total Sales]")``
+    cube_member
+        Write a CUBEMEMBER formula to a cell and return the resolved value.
+        Requires ``target_cell`` and ``member_expression``; optional ``caption``,
+        ``sheet``, ``connection``.
+        Example: ``excel_datamodel(action="cube_member", target_cell="A2",
+        member_expression="[Date].[Year].&[2024]")``
+    add_calculated_column
+        Not supported — calculated columns require Power BI / Analysis Services.
+        Use ``add_measure`` for DAX aggregations instead. Always raises ToolError.
+        Example: ``excel_datamodel(action="add_calculated_column")``
+    add_calculated_table
+        Not supported — calculated tables require Power BI / Analysis Services.
+        Always raises ToolError.
+        Example: ``excel_datamodel(action="add_calculated_table")``
     """
     return datamodel_action(
         action,
@@ -727,6 +820,14 @@ def excel_datamodel(
         new_formula=new_formula,
         new_format_type=new_format_type,
         new_description=new_description,
+        target_cell=target_cell,
+        measure=measure,
+        members=members,
+        kind=kind,
+        member_expression=member_expression,
+        caption=caption,
+        connection=connection,
+        sheet=sheet,
     )
 
 

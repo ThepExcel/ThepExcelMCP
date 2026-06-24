@@ -2096,6 +2096,235 @@ def run_slicer() -> None:
         _close_wb(wb, wb_name or "unknown")
 
 
+# ── Section 17: PQ Parameters ─────────────────────────────────────────────────
+
+def run_pq_parameters() -> None:
+    section_header("SECTION 17 — PQ Parameters (create / get / set / list / delete)")
+    if _check_excel_busy(
+        "pq_param.create_number", "pq_param.create_text",
+        "pq_param.get", "pq_param.set", "pq_param.list", "pq_param.cleanup",
+    ):
+        return
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # create_parameter — Number
+        try:
+            r = powerquery_action("create_parameter", name="MaxRows",
+                                  value=1000, workbook=wb_name)
+            assert r.get("created_parameter") == "MaxRows", r
+            record("pq_param.create_number", "PASS")
+        except Exception as e:
+            record("pq_param.create_number", "FAIL", str(e))
+
+        # create_parameter — Text
+        try:
+            r = powerquery_action("create_parameter", name="Region",
+                                  value="North", param_type="Text",
+                                  workbook=wb_name)
+            assert r.get("created_parameter") == "Region", r
+            record("pq_param.create_text", "PASS")
+        except Exception as e:
+            record("pq_param.create_text", "FAIL", str(e))
+
+        # get_parameter round-trip
+        try:
+            r = powerquery_action("get_parameter", name="MaxRows",
+                                  workbook=wb_name)
+            assert r.get("value") == 1000, r
+            assert r.get("type") == "Number", r
+            record("pq_param.get", "PASS", f"value={r['value']} type={r['type']}")
+        except Exception as e:
+            record("pq_param.get", "FAIL", str(e))
+
+        # set_parameter changes value
+        try:
+            r = powerquery_action("set_parameter", name="MaxRows",
+                                  value=500, workbook=wb_name)
+            assert r.get("set_parameter") == "MaxRows", r
+            # verify effect: read back
+            r2 = powerquery_action("get_parameter", name="MaxRows",
+                                   workbook=wb_name)
+            assert r2.get("value") == 500, r2
+            record("pq_param.set", "PASS", f"new_value={r2['value']}")
+        except Exception as e:
+            record("pq_param.set", "FAIL", str(e))
+
+        # list_parameters returns both created parameters
+        try:
+            r = powerquery_action("list_parameters", workbook=wb_name)
+            params = r.get("parameters", [])
+            names = [p["name"] for p in params]
+            assert "MaxRows" in names, names
+            assert "Region" in names, names
+            record("pq_param.list", "PASS", f"params={names}")
+        except Exception as e:
+            record("pq_param.list", "FAIL", str(e))
+
+        # cleanup — delete both parameter queries
+        try:
+            powerquery_action("delete", name="MaxRows", workbook=wb_name)
+            powerquery_action("delete", name="Region", workbook=wb_name)
+            record("pq_param.cleanup", "PASS")
+        except Exception as e:
+            record("pq_param.cleanup", "FAIL", str(e))
+
+    except Exception as e:
+        record("section17.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 18: Cube formula builders + best-effort live cube_value ────────────
+
+def run_cube() -> None:
+    section_header("SECTION 18 — Cube formula builders + best-effort cube_value")
+    if _check_excel_busy(
+        "cube.formula_cubevalue", "cube.formula_cubemember",
+        "cube.formula_cubevalue_members", "cube.live_cube_value",
+        "cube.calc_column_guard", "cube.calc_table_guard",
+    ):
+        return
+
+    # ── Part A: pure-Python builder strings (no Excel needed) ─────────────────
+    try:
+        from thepexcel_mcp.domains.datamodel import (
+            _build_cubevalue, _build_cubemember, DEFAULT_CONNECTION,
+        )
+
+        formula = _build_cubevalue(
+            measure="[Measures].[Total Sales]",
+            members=None,
+            connection=DEFAULT_CONNECTION,
+        )
+        assert "CUBEVALUE" in formula, formula
+        assert "[Measures].[Total Sales]" in formula, formula
+        record("cube.formula_cubevalue", "PASS", formula[:60])
+    except Exception as e:
+        record("cube.formula_cubevalue", "FAIL", str(e))
+
+    try:
+        formula = _build_cubemember(
+            member_expression="[Date].[Year].&[2024]",
+            caption=None,
+            connection=DEFAULT_CONNECTION,
+        )
+        assert "CUBEMEMBER" in formula, formula
+        assert "[Date].[Year].&[2024]" in formula, formula
+        record("cube.formula_cubemember", "PASS", formula[:60])
+    except Exception as e:
+        record("cube.formula_cubemember", "FAIL", str(e))
+
+    try:
+        formula = _build_cubevalue(
+            measure="[Measures].[Total Sales]",
+            members=["[Date].[Year].&[2024]", "[Product].[Category].&[Bikes]"],
+            connection=DEFAULT_CONNECTION,
+        )
+        assert "CUBEVALUE" in formula, formula
+        assert "[Date].[Year].&[2024]" in formula, formula
+        record("cube.formula_cubevalue_members", "PASS", formula[:80])
+    except Exception as e:
+        record("cube.formula_cubevalue_members", "FAIL", str(e))
+
+    # ── Part B: live cube_value with deadlock-SKIP guard (mirrors section 5) ───
+    import thepexcel_mcp.session as _session_mod
+    prev_timeout = _session_mod._DEFAULT_TIMEOUT
+    _session_mod._DEFAULT_TIMEOUT = 30
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        sales_m = textwrap.dedent("""\
+            let
+                Source = #table(
+                    type table [ProductID=Int64.Type, Amount=Int64.Type],
+                    {{1, 1000}, {2, 1500}, {1, 1200}}
+                )
+            in
+                Source""")
+        powerquery_action("create", name="CubeSales", formula=sales_m,
+                          workbook=wb_name)
+
+        # add_table may deadlock (no UI pump in automation context) — SKIP not FAIL
+        model_ok = False
+        try:
+            datamodel_action("add_table", workbook=wb_name,
+                             source_type="query", source_name="CubeSales")
+            model_ok = True
+        except Exception as e:
+            if _is_timeout_error(e):
+                record("cube.live_cube_value", "SKIP",
+                       "Data Model build deadlocked — no UI pump (expected in automation)")
+            else:
+                record("cube.live_cube_value", "FAIL", f"add_table: {e}")
+
+        if model_ok:
+            try:
+                r = datamodel_action("cube_value", workbook=wb_name,
+                                     target_cell="A1",
+                                     measure="[Measures].[Sum of Amount]")
+                record("cube.live_cube_value", "PASS",
+                       f"value={r.get('value')}")
+            except Exception as e:
+                if _is_timeout_error(e):
+                    record("cube.live_cube_value", "SKIP",
+                           "cube_value timed out — Data Model not ready in automation")
+                else:
+                    record("cube.live_cube_value", "FAIL", str(e))
+
+    except Exception as e:
+        record("section18.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        if wb is not None:
+            try:
+                def _delete_queries():
+                    while wb.Queries.Count > 0:
+                        wb.Queries.Item(1).Delete()
+                _session.run_com(_delete_queries)
+            except Exception:
+                pass
+        _close_wb(wb, wb_name or "unknown")
+        _session_mod._DEFAULT_TIMEOUT = prev_timeout
+
+    # ── Part C: add_calculated_column / add_calculated_table guard (pure, no Excel) ──
+    try:
+        from fastmcp.exceptions import ToolError
+        try:
+            datamodel_action("add_calculated_column")
+            record("cube.calc_column_guard", "FAIL", "expected ToolError, got none")
+        except ToolError as te:
+            msg = str(te)
+            assert "Power BI" in msg or "Power Query" in msg or "READ-ONLY" in msg or \
+                   "add_measure" in msg, f"unexpected msg: {msg}"
+            record("cube.calc_column_guard", "PASS", "ToolError raised as expected")
+        except Exception as e:
+            record("cube.calc_column_guard", "FAIL", f"wrong exception type: {e}")
+    except Exception as e:
+        record("cube.calc_column_guard", "FAIL", str(e))
+
+    try:
+        from fastmcp.exceptions import ToolError
+        try:
+            datamodel_action("add_calculated_table")
+            record("cube.calc_table_guard", "FAIL", "expected ToolError, got none")
+        except ToolError as te:
+            msg = str(te)
+            assert "Power BI" in msg or "Analysis Services" in msg, \
+                   f"unexpected msg: {msg}"
+            record("cube.calc_table_guard", "PASS", "ToolError raised as expected")
+        except Exception as e:
+            record("cube.calc_table_guard", "FAIL", f"wrong exception type: {e}")
+    except Exception as e:
+        record("cube.calc_table_guard", "FAIL", str(e))
+
+
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
@@ -2128,6 +2357,8 @@ _ALL_SECTIONS = {
     "14": run_view,
     "15": run_validation,
     "16": run_slicer,
+    "17": run_pq_parameters,
+    "18": run_cube,
 }
 
 
