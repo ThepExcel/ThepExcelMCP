@@ -2,11 +2,11 @@
   "manifest_version": "0.4",
   "name": "thepexcel-excel",
   "display_name": "ThepExcel Excel MCP",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Full Excel control via COM — Power Query, PivotTables, Data Model/DAX, VBA, dynamic arrays, charts, screenshots. Windows only.",
   "author": {
     "name": "ThepExcel",
-    "email": "sira.ekabut@gmail.com"
+    "email": "thepexcel@gmail.com"
   },
   "license": "MIT",
   "server": {
@@ -17,17 +17,32 @@
     "platforms": ["win32"]
   },
   "tools": [
-    {"name": "excel_workbook",   "description": "List, open, save, close, and inspect Excel workbooks"},
-    {"name": "excel_sheet",      "description": "Add, rename, delete, and list worksheets"},
-    {"name": "excel_range",      "description": "Read/write cell ranges, formulas, and dynamic array spill zones"},
-    {"name": "excel_powerquery", "description": "Create, edit, load, and refresh Power Query (M code) queries"},
-    {"name": "excel_table",      "description": "Create and manage Excel structured tables (ListObjects)"},
-    {"name": "excel_pivot",      "description": "Build and configure PivotTables from tables or Data Model"},
-    {"name": "excel_datamodel",  "description": "Manage the Excel Data Model: tables, relationships, DAX measures"},
-    {"name": "excel_vba",        "description": "Read, write, and run VBA modules (requires trust setting)"},
-    {"name": "excel_name",       "description": "Manage named ranges and LAMBDA custom functions"},
-    {"name": "excel_chart",      "description": "Create, configure, and export Excel charts"},
-    {"name": "excel_screenshot", "description": "Capture PNG screenshots of ranges, sheets, or charts"}
+    {"name": "excel_workbook",          "description": "Manage open workbooks: discover, open, create, save, save-as, and close."},
+    {"name": "excel_sheet",             "description": "Manage worksheets within a workbook: list, add, rename, delete."},
+    {"name": "excel_range",             "description": "Read and write cell ranges, including dynamic-array spill and Python-in-Excel formulas."},
+    {"name": "excel_powerquery",        "description": "Manage Power Query (M code) queries: CRUD, refresh, load to table/model, analyze, and parameter ops."},
+    {"name": "excel_table",             "description": "Manage Excel Tables (ListObjects): create, read, append, add columns, sort, filter, style, totals, rename, delete."},
+    {"name": "excel_pivot",             "description": "Manage PivotTables: create, add/remove/move fields, set layout, refresh, read, and delete."},
+    {"name": "excel_datamodel",         "description": "Manage the Excel Data Model (Power Pivot): tables, relationships, DAX measures, and CUBE formula helpers."},
+    {"name": "excel_name",              "description": "Manage defined names: named ranges, constants, and LAMBDA formulas."},
+    {"name": "excel_chart",             "description": "Create and manage embedded charts: create, configure, change source, export PNG, delete."},
+    {"name": "excel_shape",             "description": "Add and manage drawing objects (images, text boxes, AutoShapes): add, list, move, delete."},
+    {"name": "excel_slicer",            "description": "Manage slicers and date timelines for PivotTables and Tables: add, add_timeline, list, delete, connect."},
+    {"name": "excel_sparkline",         "description": "Add, clear, and list in-cell sparkline mini-charts (line, column, win/loss)."},
+    {"name": "excel_format",            "description": "Apply cell formatting: font, fill, border, number format, alignment, column/row sizing, autofit."},
+    {"name": "excel_view",              "description": "Control worksheet display settings: freeze panes, gridlines, zoom, row/column headings."},
+    {"name": "excel_conditional_format","description": "Add or remove conditional formatting rules: data bar, color scale, icon set, cell rule, top/bottom, clear."},
+    {"name": "excel_validation",        "description": "Add or remove data validation on ranges: dropdown list, number/decimal/date/text-length/custom constraints, clear."},
+    {"name": "excel_page_setup",        "description": "Configure page setup and export to PDF: orientation, paper size, margins, fit-to-page, print area, titles, headers/footers, PDF export."},
+    {"name": "excel_comment",           "description": "Add, edit, reply to, delete, list, and get cell comments (legacy notes and threaded)."},
+    {"name": "excel_hyperlink",         "description": "Add, list, and delete worksheet hyperlinks (URL, internal, email, file)."},
+    {"name": "excel_outline",           "description": "Group/ungroup rows and columns, control outline levels, and clear all groupings."},
+    {"name": "excel_protection",        "description": "Protect/unprotect worksheets and workbooks, set cell lock/formula-hidden flags, and query protection status."},
+    {"name": "excel_vba",               "description": "Manage VBA modules and run macros (opt-in, requires THEPEXCEL_MCP_ENABLE_VBA=1 and AccessVBOM trust)."},
+    {"name": "excel_screenshot",        "description": "Capture a range, sheet, or chart as PNG for visual verification by the AI agent."},
+    {"name": "excel_find_replace",      "description": "Find, count, or replace text across a range, sheet, or entire workbook with match-case and whole-cell options."},
+    {"name": "excel_diff",              "description": "Diff two ranges or two whole sheets cell-by-cell on values, formulas, or both (pure read, no mutation)."},
+    {"name": "excel_snapshot",          "description": "Non-destructive workbook safety copies: snapshot (SaveCopyAs), list, restore (open copy as new workbook), delete."}
   ],
   "user_config": {
     "autolaunch": {

@@ -73,7 +73,7 @@ This keeps the verdict at **LOW, not NONE** (correcting the impact-map's over-ro
 
 ## Action items (active + dated — NOT passive "just track fastmcp")
 
-1. **[Optional hardening — needs พี่ระ's go: dependency change]** Tighten the `fastmcp` pin from the open `>=3.0.0` to a tested floor+ceiling and keep `uv.lock` committed for a deterministic bundle. Trade-off: a ceiling forces a *deliberate* bump when the RC-ready release lands (whether it's 3.x or 4.x) instead of a silent auto-pull. `uv.lock` is already committed (exact 3.4.2/1.27.2), so the running bundle is already reproducible today.
+1. **[Optional hardening — needs maintainer sign-off: dependency change]** Tighten the `fastmcp` pin from the open `>=3.0.0` to a tested floor+ceiling and keep `uv.lock` committed for a deterministic bundle. Trade-off: a ceiling forces a *deliberate* bump when the RC-ready release lands (whether it's 3.x or 4.x) instead of a silent auto-pull. `uv.lock` is already committed (exact 3.4.2/1.27.2), so the running bundle is already reproducible today.
 2. **Dated watch (calendar, not vibes).** Watch [gofastmcp.com/changelog](https://gofastmcp.com/changelog) + [fastmcp releases](https://github.com/jlowin/fastmcp/releases) from the **week of June 30 2026** (mcp SDK v2 beta) and again **July 27** (v2 stable). **Buy signal** = a `fastmcp` release whose notes name *MCP 2026-07-28 / SEP-2575 / sessionless / `mcp>=2.0.0`*.
 3. **On the buy signal, run the migration runbook (below) — before observing a break.** Do it proactively, because the break manifests as "Claude can't see the Excel tools," which is easy to misdiagnose.
 4. **Pre-write the diagnostic** into `CLAUDE.md` → `## Session Knowledge` (done as part of this audit): *if post-July-2026 the `thepexcel-excel` MCP silently disappears from Claude's tool list (tools not callable, NOT a COM/Excel error) → suspect MCP protocol skew, not Excel → `uv sync` an RC-ready fastmcp + restart the server.*
@@ -81,8 +81,8 @@ This keeps the verdict at **LOW, not NONE** (correcting the impact-map's over-ro
 ### Migration runbook (execute only when the buy signal fires)
 
 ```
-1. uv sync                                  # pull the RC-ready fastmcp into D:/ThepExcelMCP
-2. THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py   # all 14 tools still pass?
+1. uv sync                                  # pull the RC-ready fastmcp into the repo venv
+2. THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py   # all tools still pass?
 3. CLIENT-HANDSHAKE CHECK (manual, the real test):
    restart Claude Desktop/Code → confirm "thepexcel-excel" appears in the tool list
    AND one tool call succeeds (e.g. excel_workbook list).

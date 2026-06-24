@@ -46,7 +46,7 @@ The VBA + Power Query + Data Model cluster requires desktop COM — no cloud com
 - **P3 ✅** STA worker-thread hardening · `excel_vba` · LAMBDA/named formulas (`excel_name`) + spill introspection (`read_spill`, spill metadata in `read`)
 - **P4 ✅** `excel_chart` (list/create/configure/set_source/export_image/delete) · `excel_screenshot` (range/sheet/chart → PNG, CopyPicture+PIL) · `excel_range(action="write_py")` (`=PY()` Formula2R1C1 insertion, experimental)
 - **P5 ✅** Live COM smoke (48 PASS / 0 FAIL / 13 SKIP) · MCPB bundle (`dist/thepexcel-mcp.mcpb`) · README install+register · `claude mcp add` registration
-- **Companion SKILL ✅** `excel-god` (เทพเอ็กเซล; shipped 2026-06-12 as `excel-assist`, renamed 2026-06-16) at `claude-master/skills/excel-god/` — architecture framework + tool/layer-selection routing (openpyxl/xlsx ↔ MCP-live ↔ PQ skills) + recipes + gotchas
+- **Companion SKILL ✅** `excel-god` (shipped 2026-06-12) — bundled in this repo at `skills/excel-god/`: architecture framework + tool/layer-selection routing (openpyxl/xlsx ↔ MCP-live) + recipes + gotchas
 - **Later** snapshot/undo + excel_diff (pattern from lingfan36/ai-office-mcp); progressive-disclosure meta-tool if tool context grows
 
 ## Phase 5 — Live Smoke Test Results (2026-06-12)
