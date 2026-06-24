@@ -105,6 +105,7 @@ try:
     from thepexcel_mcp.domains.shapes      import shape_action
     from thepexcel_mcp.domains.find_replace import find_replace_action
     from thepexcel_mcp.domains.diff         import diff_action
+    from thepexcel_mcp.domains.snapshot     import snapshot_action
 except ImportError as e:
     print(f"Import failed: {e}")
     sys.exit(1)
@@ -3406,6 +3407,135 @@ def run_diff() -> None:
         _close_wb(wb2, wb2_name or "unknown")
 
 
+# ── Section 28: Snapshot (snapshot / list / restore / delete) ──────────────────
+
+def run_snapshot() -> None:
+    """Live read-back smoke for workbook snapshots.
+
+    Verifies the SAFE primitive: snapshot writes an on-disk copy (read back via
+    os.path.exists), restore opens that copy as a SEPARATE new workbook (read
+    back from app.Workbooks), and delete removes the file from disk. The temp
+    workbook is never overwritten or reverted by the tool.
+    """
+    section_header("SECTION 28 — Snapshot (snapshot / list / restore / delete)")
+    if _check_excel_busy(
+        "snapshot.snapshot", "snapshot.list", "snapshot.restore", "snapshot.delete"
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    snap_path = None            # the snapshot exercised by restore
+    del_snap_path = None        # a second snapshot exercised by delete
+    restored_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # Put a value in so the copy has real content.
+        def _seed():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1").Value = "snapshot-smoke"
+        _session.run_com(_seed)
+
+        snap_id = None
+        del_snap_id = None
+
+        # ── snapshot → file exists on disk ──────────────────────────────────
+        try:
+            r = snapshot_action("snapshot", workbook=wb_name)
+            snap_id = r["id"]
+            snap_path = r["path"]
+            assert os.path.exists(snap_path), f"snapshot file missing at {snap_path}"
+            assert r["size_bytes"] > 0, f"snapshot size_bytes not positive: {r['size_bytes']}"
+            record("snapshot.snapshot", "PASS",
+                   f"id={snap_id} exists=True size={r['size_bytes']}")
+        except Exception as e:
+            record("snapshot.snapshot", "FAIL", str(e))
+
+        # Second snapshot reserved for the delete sub-test. delete cannot remove
+        # a snapshot whose restored copy is still open in Excel (OS file lock —
+        # correct behaviour), so we delete a snapshot that was NEVER restored.
+        try:
+            r2 = snapshot_action("snapshot", workbook=wb_name)
+            del_snap_id = r2["id"]
+            del_snap_path = r2["path"]
+        except Exception as e:
+            print(f"  [setup] Warning: second snapshot for delete sub-test failed: {e}")
+
+        # ── list → contains that id ─────────────────────────────────────────
+        try:
+            r = snapshot_action("list")
+            ids = [s["id"] for s in r["snapshots"]]
+            assert snap_id in ids, f"id {snap_id} not in list {ids}"
+            entry = next(s for s in r["snapshots"] if s["id"] == snap_id)
+            assert entry["exists"] is True, f"list entry exists expected True, got {entry['exists']}"
+            record("snapshot.list", "PASS", f"count={r['count']} exists={entry['exists']}")
+        except Exception as e:
+            record("snapshot.list", "FAIL", str(e))
+
+        # ── restore → opened workbook name present in app.Workbooks ─────────
+        try:
+            r = snapshot_action("restore", snapshot_id=snap_id)
+            restored_name = r["opened_workbook"]
+
+            def _list_names():
+                app = _session.get_app()
+                return [app.Workbooks(i + 1).Name for i in range(app.Workbooks.Count)]
+            names = _session.run_com(_list_names)
+            assert restored_name in names, (
+                f"restored workbook {restored_name} not in open set {names}"
+            )
+            # SAFETY: the original temp workbook must STILL be open (not closed/reverted).
+            assert wb_name in names, (
+                f"original workbook {wb_name} vanished after restore — set={names}"
+            )
+            record("snapshot.restore", "PASS",
+                   f"opened={restored_name} original_still_open=True")
+        except Exception as e:
+            record("snapshot.restore", "FAIL", str(e))
+
+        # ── delete → file gone from disk (un-restored snapshot, no file lock) ─
+        try:
+            if del_snap_id is None:
+                raise AssertionError("second snapshot was not created")
+            r = snapshot_action("delete", snapshot_id=del_snap_id)
+            assert r["deleted"] == del_snap_id, f"deleted id mismatch: {r}"
+            assert not os.path.exists(del_snap_path), (
+                f"snapshot file still on disk after delete: {del_snap_path}"
+            )
+            record("snapshot.delete", "PASS", f"deleted={del_snap_id} exists=False")
+        except Exception as e:
+            record("snapshot.delete", "FAIL", str(e))
+
+    except Exception as e:
+        record("section28.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        # Close the restored copy (a separate book) if it is still open.
+        if restored_name:
+            def _close_restored():
+                app = _session.get_app()
+                for i in range(app.Workbooks.Count):
+                    wbk = app.Workbooks(i + 1)
+                    if wbk.Name == restored_name:
+                        wbk.Close(SaveChanges=False)
+                        return
+            try:
+                _session.run_com(_close_restored)
+                print(f"  [cleanup] Closed restored copy '{restored_name}'")
+            except Exception as e:
+                print(f"  [cleanup] Warning: could not close restored '{restored_name}': {e}")
+        # Remove any leftover snapshot files (restore copy must be closed first).
+        for leftover in (snap_path, del_snap_path):
+            if leftover and os.path.exists(leftover):
+                try:
+                    os.remove(leftover)
+                    print(f"  [cleanup] Removed leftover snapshot file '{leftover}'")
+                except Exception as e:
+                    print(f"  [cleanup] Warning: could not remove '{leftover}': {e}")
+        _close_wb(wb, wb_name or "unknown")
+
+
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
@@ -3449,6 +3579,7 @@ _ALL_SECTIONS = {
     "25": run_shape,
     "26": run_find_replace,
     "27": run_diff,
+    "28": run_snapshot,
 }
 
 

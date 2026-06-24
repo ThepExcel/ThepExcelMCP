@@ -28,6 +28,7 @@ from .domains.screenshot import screenshot_action
 from .domains.shapes import shape_action
 from .domains.sheets import sheet_action
 from .domains.slicer import slicer_action
+from .domains.snapshot import snapshot_action
 from .domains.sparkline import sparkline_action
 from .domains.tables import table_action
 from .domains.validation import validation_action
@@ -2604,6 +2605,69 @@ def excel_diff(
         right_workbook=right_workbook,
         compare=compare,
         max_diffs=max_diffs,
+    )
+
+
+@mcp.tool()
+def excel_snapshot(
+    action: str,
+    workbook: str | None = None,
+    snapshot_id: str | None = None,
+) -> dict:
+    """Create and restore non-destructive, on-disk safety copies of a workbook.
+
+    SAFETY (the defining property): this tool NEVER closes, overwrites, or
+    reverts the workbook you are editing. ``snapshot`` writes a COPY to disk via
+    ``SaveCopyAs`` (which leaves the live workbook's name, path, and dirty flag
+    untouched); ``restore`` only OPENS that copy as a separate new workbook
+    alongside everything else. There is no in-place / close-and-reopen path.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``snapshot``, ``list``, ``restore``, ``delete``.
+    workbook : str, optional
+        Workbook name to snapshot. Uses the active workbook when omitted.
+        (Only used by ``snapshot``.)
+    snapshot_id : str, optional
+        The snapshot id returned by ``snapshot``. REQUIRED for ``restore`` and
+        ``delete``.
+
+    Actions
+    -------
+    snapshot
+        Save a point-in-time copy of *workbook* to a temp directory via
+        ``SaveCopyAs``. The source extension is preserved, so an .xlsm keeps its
+        macros. The live workbook is NOT modified, saved, or rebound.
+        Returns ``{id, path, workbook, size_bytes, created}``.
+        Example::
+
+            excel_snapshot(action="snapshot")               # active workbook
+            excel_snapshot(action="snapshot", workbook="Sales.xlsx")
+
+    list
+        List every snapshot taken this session with ``{id, workbook, path,
+        created, exists, size_bytes}`` (``exists`` reflects whether the file is
+        still on disk). Read-only.
+
+    restore
+        Open the snapshot ``snapshot_id`` as a NEW, separate workbook — your
+        original workbook is left exactly as it is. To revert, copy what you
+        need out of the opened restored copy by hand.
+        Example::
+
+            excel_snapshot(action="restore", snapshot_id="snap_1_Sales")
+
+    delete
+        Delete the snapshot file from disk and remove it from the registry.
+        Example::
+
+            excel_snapshot(action="delete", snapshot_id="snap_1_Sales")
+    """
+    return snapshot_action(
+        action,
+        workbook=workbook,
+        snapshot_id=snapshot_id,
     )
 
 
