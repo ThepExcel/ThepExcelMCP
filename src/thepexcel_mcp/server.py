@@ -10,16 +10,22 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
 
 from .domains.charts import chart_action
+from .domains.comments import comment_action
 from .domains.conditional_format import conditional_format_action
 from .domains.datamodel import datamodel_action
 from .domains.format import format_action
+from .domains.hyperlinks import hyperlink_action
 from .domains.names import name_action
+from .domains.outline import outline_action
+from .domains.page_setup import page_setup_action
 from .domains.pivots import pivot_action
 from .domains.powerquery import powerquery_action
+from .domains.protection import protection_action
 from .domains.ranges import range_action
 from .domains.screenshot import screenshot_action
 from .domains.sheets import sheet_action
 from .domains.slicer import slicer_action
+from .domains.sparkline import sparkline_action
 from .domains.tables import table_action
 from .domains.validation import validation_action
 from .domains.vba import vba_action
@@ -1707,6 +1713,631 @@ def excel_slicer(
         height=height,
         slicer=slicer,
         pivots=pivots,
+    )
+
+
+@mcp.tool()
+def excel_page_setup(
+    action: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    # set
+    orientation: str | None = None,
+    paper_size: str | None = None,
+    fit_to_wide: int | None = None,
+    fit_to_tall: int | None = None,
+    scale: int | None = None,
+    top: float | None = None,
+    bottom: float | None = None,
+    left: float | None = None,
+    right: float | None = None,
+    header: float | None = None,
+    footer: float | None = None,
+    center_horizontally: bool | None = None,
+    center_vertically: bool | None = None,
+    print_gridlines: bool | None = None,
+    black_and_white: bool | None = None,
+    # print_area
+    address: str | None = None,
+    # print_titles
+    rows: str | None = None,
+    cols: str | None = None,
+    # header_footer
+    left_header: str | None = None,
+    center_header: str | None = None,
+    right_header: str | None = None,
+    left_footer: str | None = None,
+    center_footer: str | None = None,
+    right_footer: str | None = None,
+    # export_pdf
+    path: str | None = None,
+    scope: str = "sheet",
+    open_after: bool = False,
+) -> dict:
+    """Configure worksheet page setup and export to PDF.
+
+    Controls orientation, paper size, margins, fit-to-page scaling, print area,
+    print titles (repeating rows/columns), headers/footers, and PDF export.
+    Margins are given in INCHES (converted to points internally).
+
+    Parameters
+    ----------
+    action : str
+        One of: ``set``, ``print_area``, ``print_titles``, ``header_footer``,
+        ``export_pdf``, ``get``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    orientation : str, optional
+        ``"portrait"`` or ``"landscape"`` (``set`` action).
+    paper_size : str, optional
+        ``"a4"``, ``"letter"``, ``"a3"``, ``"legal"`` (``set`` action).
+    fit_to_wide : int, optional
+        FitToPagesWide — scale to N pages wide. Also disables Zoom (``set``).
+    fit_to_tall : int, optional
+        FitToPagesTall — scale to N pages tall. Also disables Zoom (``set``).
+    scale : int, optional
+        Print zoom 10–400 (``set``). Mutually exclusive with fit_to_*.
+    top, bottom, left, right, header, footer : float, optional
+        Margins in INCHES (``set``).
+    center_horizontally, center_vertically : bool, optional
+        Center the printout on the page (``set``).
+    print_gridlines : bool, optional
+        Print cell gridlines (``set``).
+    black_and_white : bool, optional
+        Print in black & white (``set``).
+    address : str, optional
+        Print-area range for ``print_area`` (e.g. ``"A1:F50"``; ``""`` clears it).
+    rows : str, optional
+        Repeating title rows for ``print_titles`` (e.g. ``"$1:$1"``).
+    cols : str, optional
+        Repeating title columns for ``print_titles`` (e.g. ``"$A:$A"``).
+    left_header, center_header, right_header : str, optional
+        Header slots (``header_footer``). Excel codes: ``&P`` page, ``&N`` pages,
+        ``&D`` date, ``&T`` time, ``&F`` file name, ``&A`` sheet name.
+    left_footer, center_footer, right_footer : str, optional
+        Footer slots (``header_footer``).
+    path : str, optional
+        Full path ending in ``.pdf`` for ``export_pdf``.
+    scope : str, optional
+        ``"sheet"`` (default) or ``"workbook"`` for ``export_pdf``.
+    open_after : bool, optional
+        Open the PDF after export (``export_pdf``, default False).
+
+    Actions
+    -------
+    set
+        Set any subset of page-setup properties; only supplied values change.
+        Example::
+
+            excel_page_setup(action="set", sheet="Report",
+                             orientation="landscape", paper_size="a4",
+                             fit_to_wide=1, top=0.5)
+
+    print_area
+        Set or clear the print area.
+        Example::
+
+            excel_page_setup(action="print_area", address="A1:F50")
+            excel_page_setup(action="print_area", address="")   # clear
+
+    print_titles
+        Set repeating header rows/columns for printing.
+        Example::
+
+            excel_page_setup(action="print_titles", rows="$1:$1", cols="$A:$A")
+
+    header_footer
+        Set header/footer slots (supports Excel codes).
+        Example::
+
+            excel_page_setup(action="header_footer",
+                             center_header="ThepExcel Report",
+                             right_footer="Page &P of &N")
+
+    export_pdf
+        Export the sheet or workbook to PDF.
+        Example::
+
+            excel_page_setup(action="export_pdf", path="C:/temp/report.pdf",
+                             scope="sheet")
+
+    get
+        Read back the current page-setup properties as a dict.
+        Example::
+
+            excel_page_setup(action="get", sheet="Report")
+    """
+    return page_setup_action(
+        action,
+        sheet=sheet,
+        workbook=workbook,
+        orientation=orientation,
+        paper_size=paper_size,
+        fit_to_wide=fit_to_wide,
+        fit_to_tall=fit_to_tall,
+        scale=scale,
+        top=top,
+        bottom=bottom,
+        left=left,
+        right=right,
+        header=header,
+        footer=footer,
+        center_horizontally=center_horizontally,
+        center_vertically=center_vertically,
+        print_gridlines=print_gridlines,
+        black_and_white=black_and_white,
+        address=address,
+        rows=rows,
+        cols=cols,
+        left_header=left_header,
+        center_header=center_header,
+        right_header=right_header,
+        left_footer=left_footer,
+        center_footer=center_footer,
+        right_footer=right_footer,
+        path=path,
+        scope=scope,
+        open_after=open_after,
+    )
+
+
+@mcp.tool()
+def excel_comment(
+    action: str,
+    cell: str | None = None,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    text: str | None = None,
+    kind: str = "note",
+) -> dict:
+    """Add, edit, reply to, delete, or read cell comments (notes and threaded).
+
+    Excel has two comment systems: legacy yellow sticky **notes** (``kind="note"``)
+    and modern **threaded** comments (``kind="threaded"``). Notes support edit;
+    threaded comments support replies. Notes are added with delete-before-add to
+    avoid COM error 1004.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``add``, ``edit``, ``reply``, ``delete``, ``list``, ``get``.
+    cell : str, optional
+        Single-cell address (e.g. ``"A1"``). Required for all actions except ``list``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    text : str, optional
+        Comment text. Required for ``add``, ``edit``, ``reply``.
+    kind : str, optional
+        ``"note"`` (default) for legacy notes, ``"threaded"`` for threaded comments,
+        or ``"all"`` for the ``list``/``get`` actions to return both kinds.
+
+    Actions
+    -------
+    add
+        Add a note or threaded comment.
+        Example::
+
+            excel_comment(action="add", cell="A1", text="Check this figure")
+            excel_comment(action="add", cell="B2", text="Needs review",
+                          kind="threaded")
+
+    edit
+        Replace the text of an existing note (``kind="note"`` only; for threaded,
+        use ``add`` to delete+re-add).
+        Example::
+
+            excel_comment(action="edit", cell="A1", text="Updated note")
+
+    reply
+        Add a reply to a threaded comment (``kind="threaded"`` only).
+        Example::
+
+            excel_comment(action="reply", cell="B2", text="Confirmed",
+                          kind="threaded")
+
+    delete
+        Delete the note or threaded comment on a cell.
+        Example::
+
+            excel_comment(action="delete", cell="A1")
+            excel_comment(action="delete", cell="B2", kind="threaded")
+
+    list
+        List all notes and/or threaded comments on the sheet.
+        Example::
+
+            excel_comment(action="list", kind="all")
+
+    get
+        Read the note and/or threaded comment on a single cell.
+        Example::
+
+            excel_comment(action="get", cell="A1", kind="all")
+    """
+    return comment_action(
+        action,
+        cell=cell,
+        sheet=sheet,
+        workbook=workbook,
+        text=text,
+        kind=kind,
+    )
+
+
+@mcp.tool()
+def excel_hyperlink(
+    action: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    cell: str | None = None,
+    link_type: str | None = None,
+    target: str | None = None,
+    sub_address: str | None = None,
+    text_to_display: str | None = None,
+    screen_tip: str | None = None,
+    range: str | None = None,
+) -> dict:
+    """Add, list, or delete worksheet hyperlinks.
+
+    Supports URL, internal (sheet/cell), email, and file hyperlinks. Deleting
+    hyperlinks keeps the cell text and value intact.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``add``, ``list``, ``delete``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    cell : str, optional
+        Anchor cell for ``add`` (e.g. ``"A1"``).
+    link_type : str, optional
+        Required for ``add``. One of: ``url``, ``internal``, ``email``, ``file``.
+    target : str, optional
+        The URL, file path, or email address (``add``). For ``internal`` links,
+        use ``sub_address`` instead.
+    sub_address : str, optional
+        In-document anchor for ``internal`` links (e.g. ``"Sheet1!C3"``).
+    text_to_display : str, optional
+        Visible cell text for ``add``.
+    screen_tip : str, optional
+        Hover tooltip for ``add``.
+    range : str, optional
+        Range to clear hyperlinks from for ``delete`` (e.g. ``"A1"`` or ``"A1:A10"``).
+
+    Actions
+    -------
+    add
+        Add a hyperlink to a cell.
+        Example::
+
+            excel_hyperlink(action="add", cell="A1", link_type="url",
+                            target="https://www.thepexcel.com",
+                            text_to_display="ThepExcel")
+            excel_hyperlink(action="add", cell="A2", link_type="internal",
+                            sub_address="Sheet1!C3", text_to_display="Jump")
+
+    list
+        List all hyperlinks on the sheet.
+        Example::
+
+            excel_hyperlink(action="list")
+
+    delete
+        Remove all hyperlinks from a range (keeps cell text/value).
+        Example::
+
+            excel_hyperlink(action="delete", range="A1:A10")
+    """
+    return hyperlink_action(
+        action,
+        sheet=sheet,
+        workbook=workbook,
+        cell=cell,
+        link_type=link_type,
+        target=target,
+        sub_address=sub_address,
+        text_to_display=text_to_display,
+        screen_tip=screen_tip,
+        range=range,
+    )
+
+
+@mcp.tool()
+def excel_outline(
+    action: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    rows: str | None = None,
+    columns: str | None = None,
+    row_levels: int | None = None,
+    column_levels: int | None = None,
+) -> dict:
+    """Group/ungroup rows and columns and control outline levels.
+
+    Wraps Excel's row/column grouping (outline). Grouping raises the OutlineLevel
+    of the affected rows/columns to >= 2; ungrouping lowers it.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``group_rows``, ``group_columns``, ``ungroup_rows``,
+        ``ungroup_columns``, ``show_levels``, ``clear``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    rows : str, optional
+        Row spec for ``group_rows`` / ``ungroup_rows`` (e.g. ``"2:5"``).
+    columns : str, optional
+        Column spec for ``group_columns`` / ``ungroup_columns`` (e.g. ``"B:D"``).
+    row_levels : int, optional
+        Outline level (1–8) to show/collapse rows to (``show_levels``).
+    column_levels : int, optional
+        Outline level (1–8) to show/collapse columns to (``show_levels``).
+
+    Actions
+    -------
+    group_rows
+        Group a row range.
+        Example::
+
+            excel_outline(action="group_rows", rows="2:5")
+
+    group_columns
+        Group a column range.
+        Example::
+
+            excel_outline(action="group_columns", columns="B:D")
+
+    ungroup_rows
+        Ungroup a row range (lowers outline level by 1).
+        Example::
+
+            excel_outline(action="ungroup_rows", rows="2:5")
+
+    ungroup_columns
+        Ungroup a column range.
+        Example::
+
+            excel_outline(action="ungroup_columns", columns="B:D")
+
+    show_levels
+        Show/collapse the outline to a specific level. At least one of
+        ``row_levels`` / ``column_levels`` is required.
+        Example::
+
+            excel_outline(action="show_levels", row_levels=1)
+
+    clear
+        Remove ALL row/column outline groupings from the sheet.
+        Example::
+
+            excel_outline(action="clear")
+    """
+    return outline_action(
+        action,
+        sheet=sheet,
+        workbook=workbook,
+        rows=rows,
+        columns=columns,
+        row_levels=row_levels,
+        column_levels=column_levels,
+    )
+
+
+@mcp.tool()
+def excel_protection(
+    action: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    password: str | None = None,
+    drawing_objects: bool = True,
+    contents: bool = True,
+    scenarios: bool = True,
+    allow: dict | None = None,
+    allow_formatting_cells: bool = False,
+    allow_formatting_columns: bool = False,
+    allow_formatting_rows: bool = False,
+    allow_inserting_columns: bool = False,
+    allow_inserting_rows: bool = False,
+    allow_inserting_hyperlinks: bool = False,
+    allow_deleting_columns: bool = False,
+    allow_deleting_rows: bool = False,
+    allow_sorting: bool = False,
+    allow_filtering: bool = False,
+    allow_using_pivot_tables: bool = False,
+    structure: bool = True,
+    windows: bool = False,
+    range: str | None = None,
+    locked: bool | None = None,
+    hidden: bool | None = None,
+) -> dict:
+    """Protect/unprotect worksheets and workbooks and set cell lock state.
+
+    Worksheet protection locks cell editing (respecting per-cell ``Locked`` flags);
+    workbook protection locks the sheet structure and/or window layout. Cell
+    ``Locked`` / ``FormulaHidden`` flags only take effect while the sheet is
+    protected — configure them with ``set_locked`` BEFORE ``protect_sheet``.
+
+    IMPORTANT: keep track of any password you set — Excel cannot recover a lost
+    sheet/workbook password.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``protect_sheet``, ``unprotect_sheet``, ``protect_workbook``,
+        ``unprotect_workbook``, ``set_locked``, ``status``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    password : str, optional
+        Password for protect/unprotect. Must match on unprotect.
+    drawing_objects, contents, scenarios : bool, optional
+        ``protect_sheet`` structural flags (all default True).
+    allow : dict, optional
+        Optional dict of allow-flag overrides for ``protect_sheet``.
+    allow_formatting_cells, allow_formatting_columns, allow_formatting_rows,
+    allow_inserting_columns, allow_inserting_rows, allow_inserting_hyperlinks,
+    allow_deleting_columns, allow_deleting_rows, allow_sorting, allow_filtering,
+    allow_using_pivot_tables : bool, optional
+        Per-action permissions for ``protect_sheet`` (all default False).
+    structure : bool, optional
+        Lock sheet structure for ``protect_workbook`` (default True).
+    windows : bool, optional
+        Lock window layout for ``protect_workbook`` (default False).
+    range : str, optional
+        Cell range for ``set_locked`` (e.g. ``"A1:B10"``).
+    locked : bool, optional
+        Set the ``Locked`` flag on the range (``set_locked``).
+    hidden : bool, optional
+        Set the ``FormulaHidden`` flag on the range (``set_locked``).
+
+    Actions
+    -------
+    protect_sheet
+        Protect a worksheet, optionally with a password and allow-flags.
+        Example::
+
+            excel_protection(action="protect_sheet", sheet="Data",
+                             password="secret", allow_sorting=True)
+
+    unprotect_sheet
+        Remove sheet protection (supply the same password).
+        Example::
+
+            excel_protection(action="unprotect_sheet", sheet="Data",
+                             password="secret")
+
+    protect_workbook
+        Protect workbook structure and/or windows.
+        Example::
+
+            excel_protection(action="protect_workbook", password="secret",
+                             structure=True)
+
+    unprotect_workbook
+        Remove workbook protection.
+        Example::
+
+            excel_protection(action="unprotect_workbook", password="secret")
+
+    set_locked
+        Set ``Locked`` and/or ``FormulaHidden`` on a range (takes effect under
+        sheet protection).
+        Example::
+
+            excel_protection(action="set_locked", range="A1:A10", locked=False)
+
+    status
+        Read back current sheet + workbook protection flags.
+        Example::
+
+            excel_protection(action="status", sheet="Data")
+    """
+    return protection_action(
+        action,
+        sheet=sheet,
+        workbook=workbook,
+        password=password,
+        drawing_objects=drawing_objects,
+        contents=contents,
+        scenarios=scenarios,
+        allow=allow,
+        allow_formatting_cells=allow_formatting_cells,
+        allow_formatting_columns=allow_formatting_columns,
+        allow_formatting_rows=allow_formatting_rows,
+        allow_inserting_columns=allow_inserting_columns,
+        allow_inserting_rows=allow_inserting_rows,
+        allow_inserting_hyperlinks=allow_inserting_hyperlinks,
+        allow_deleting_columns=allow_deleting_columns,
+        allow_deleting_rows=allow_deleting_rows,
+        allow_sorting=allow_sorting,
+        allow_filtering=allow_filtering,
+        allow_using_pivot_tables=allow_using_pivot_tables,
+        structure=structure,
+        windows=windows,
+        range=range,
+        locked=locked,
+        hidden=hidden,
+    )
+
+
+@mcp.tool()
+def excel_sparkline(
+    action: str,
+    location: str | None = None,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    data_range: str | None = None,
+    spark_type: str = "line",
+    marker: bool | None = None,
+    color: str | None = None,
+) -> dict:
+    """Add, clear, or list in-cell sparkline mini-charts.
+
+    Sparklines are tiny charts rendered inside cells. ``location`` is the
+    destination range (where the sparklines render) and ``data_range`` is the
+    source data. For a column of per-row sparklines, location ``"F2:F4"`` +
+    data_range ``"B2:E4"`` maps each destination cell to the matching data row.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``add``, ``clear``, ``list``.
+    location : str
+        REQUIRED for all actions — the destination range (e.g. ``"F2:F4"``).
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    data_range : str, optional
+        Source data range for ``add`` (e.g. ``"B2:E4"`` or ``"Sheet1!B2:E4"``).
+    spark_type : str, optional
+        ``"line"`` (default), ``"column"``, or ``"win_loss"`` for ``add``.
+    marker : bool, optional
+        Show data-point markers (line type only) for ``add``.
+    color : str, optional
+        ``"#RRGGBB"`` series color for ``add``.
+
+    Actions
+    -------
+    add
+        Add sparklines at ``location`` using data from ``data_range``.
+        Example::
+
+            excel_sparkline(action="add", location="F2:F4",
+                            data_range="B2:E4", spark_type="line")
+            excel_sparkline(action="add", location="G2:G4",
+                            data_range="B2:E4", spark_type="column")
+
+    clear
+        Remove all sparklines from ``location``.
+        Example::
+
+            excel_sparkline(action="clear", location="F2:F4")
+
+    list
+        Report sparkline groups on the sheet (scoped to ``location``).
+        Example::
+
+            excel_sparkline(action="list", location="F2")
+    """
+    return sparkline_action(
+        action,
+        location=location,
+        sheet=sheet,
+        workbook=workbook,
+        data_range=data_range,
+        spark_type=spark_type,
+        marker=marker,
+        color=color,
     )
 
 

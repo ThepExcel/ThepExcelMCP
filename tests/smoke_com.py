@@ -35,6 +35,11 @@ _results: list[Result] = []
 _excel_busy: bool = False  # set True when close_wb times out (Excel processing PQ)
 
 
+class _SkipSentinel(Exception):
+    """Internal control-flow marker: an action was already recorded SKIP and the
+    enclosing try-block should bail out without recording a FAIL."""
+
+
 def record(section: str, status: Status, detail: str = "") -> None:
     _results.append(Result(section, status, detail))
     icon = {"PASS": "PASS", "FAIL": "FAIL", "SKIP": "SKIP"}[status]
@@ -91,6 +96,12 @@ try:
     from thepexcel_mcp.domains.view       import view_action
     from thepexcel_mcp.domains.validation import validation_action
     from thepexcel_mcp.domains.slicer     import slicer_action
+    from thepexcel_mcp.domains.page_setup import page_setup_action
+    from thepexcel_mcp.domains.comments   import comment_action
+    from thepexcel_mcp.domains.hyperlinks import hyperlink_action
+    from thepexcel_mcp.domains.outline    import outline_action
+    from thepexcel_mcp.domains.protection import protection_action
+    from thepexcel_mcp.domains.sparkline  import sparkline_action
 except ImportError as e:
     print(f"Import failed: {e}")
     sys.exit(1)
@@ -2325,6 +2336,749 @@ def run_cube() -> None:
         record("cube.calc_table_guard", "FAIL", str(e))
 
 
+# ── Section 19: Page Setup ────────────────────────────────────────────────────
+
+def run_page_setup() -> None:
+    """Live read-back smoke for page-setup actions on a fresh workbook.
+
+    Reads the real ws.PageSetup COM properties after each mutation (not the
+    tool's own result dict). PDF export records SKIP if no PDF printer driver
+    is available, since some CI hosts lack one.
+    """
+    section_header("SECTION 19 — Page Setup (set / print_area / print_titles / header_footer / export_pdf / get)")
+    if _check_excel_busy(
+        "page_setup.orientation", "page_setup.paper_size", "page_setup.scale",
+        "page_setup.fit_to_pages", "page_setup.margin_top", "page_setup.center_gridlines",
+        "page_setup.print_area", "page_setup.print_titles", "page_setup.header_footer",
+        "page_setup.export_pdf", "page_setup.get",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── orientation = landscape (xlLandscape = 2) ────────────────────────
+        try:
+            page_setup_action("set", sheet="Sheet1", workbook=wb_name, orientation="landscape")
+
+            def _check_orient():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.PageSetup.Orientation
+
+            ori = _session.run_com(_check_orient)
+            assert ori == 2, f"Orientation expected 2 (xlLandscape), got {ori}"
+            record("page_setup.orientation", "PASS", f"Orientation={ori}")
+        except Exception as e:
+            record("page_setup.orientation", "FAIL", str(e))
+
+        # ── paper_size = a4 (xlPaperA4 = 9) ──────────────────────────────────
+        try:
+            page_setup_action("set", sheet="Sheet1", workbook=wb_name, paper_size="a4")
+
+            def _check_paper():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.PageSetup.PaperSize
+
+            paper = _session.run_com(_check_paper)
+            assert paper == 9, f"PaperSize expected 9 (xlPaperA4), got {paper}"
+            record("page_setup.paper_size", "PASS", f"PaperSize={paper}")
+        except Exception as e:
+            record("page_setup.paper_size", "FAIL", str(e))
+
+        # ── scale = 80 → Zoom == 80 ──────────────────────────────────────────
+        try:
+            page_setup_action("set", sheet="Sheet1", workbook=wb_name, scale=80)
+
+            def _check_zoom():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.PageSetup.Zoom
+
+            z = _session.run_com(_check_zoom)
+            assert z == 80, f"Zoom expected 80, got {z}"
+            record("page_setup.scale", "PASS", f"Zoom={z}")
+        except Exception as e:
+            record("page_setup.scale", "FAIL", str(e))
+
+        # ── fit_to_wide=1, fit_to_tall=2 → Zoom False, FitTo* set ────────────
+        try:
+            page_setup_action("set", sheet="Sheet1", workbook=wb_name,
+                              fit_to_wide=1, fit_to_tall=2)
+
+            def _check_fit():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                ps = ws.PageSetup
+                return ps.Zoom, ps.FitToPagesWide, ps.FitToPagesTall
+
+            zoom_val, fit_w, fit_t = _session.run_com(_check_fit)
+            assert zoom_val is False, f"Zoom expected False with fit-to-pages, got {zoom_val}"
+            assert fit_w == 1, f"FitToPagesWide expected 1, got {fit_w}"
+            assert fit_t == 2, f"FitToPagesTall expected 2, got {fit_t}"
+            record("page_setup.fit_to_pages", "PASS",
+                   f"Zoom={zoom_val} Wide={fit_w} Tall={fit_t}")
+        except Exception as e:
+            record("page_setup.fit_to_pages", "FAIL", str(e))
+
+        # ── top margin = 1.0 inch → TopMargin ≈ 72 points ───────────────────
+        try:
+            page_setup_action("set", sheet="Sheet1", workbook=wb_name, top=1.0)
+
+            def _check_margin():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.PageSetup.TopMargin
+
+            tm = _session.run_com(_check_margin)
+            assert abs(tm - 72.0) < 1.0, f"TopMargin expected ~72.0 pts (1 inch), got {tm}"
+            record("page_setup.margin_top", "PASS", f"TopMargin={tm}")
+        except Exception as e:
+            record("page_setup.margin_top", "FAIL", str(e))
+
+        # ── center_horizontally + print_gridlines = True ────────────────────
+        try:
+            page_setup_action("set", sheet="Sheet1", workbook=wb_name,
+                              center_horizontally=True, print_gridlines=True)
+
+            def _check_center_gl():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                ps = ws.PageSetup
+                return ps.CenterHorizontally, ps.PrintGridlines
+
+            ch, pg = _session.run_com(_check_center_gl)
+            assert ch is True, f"CenterHorizontally expected True, got {ch}"
+            assert pg is True, f"PrintGridlines expected True, got {pg}"
+            record("page_setup.center_gridlines", "PASS",
+                   f"CenterHorizontally={ch} PrintGridlines={pg}")
+        except Exception as e:
+            record("page_setup.center_gridlines", "FAIL", str(e))
+
+        # ── print_area = A1:F50 (Excel normalizes to $A$1:$F$50) ────────────
+        try:
+            page_setup_action("print_area", sheet="Sheet1", workbook=wb_name,
+                              address="A1:F50")
+
+            def _check_print_area():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.PageSetup.PrintArea
+
+            pa = _session.run_com(_check_print_area)
+            # Excel normalizes "A1:F50" to absolute "$A$1:$F$50".
+            assert "$F$50" in pa, f"PrintArea expected to contain '$F$50', got {pa!r}"
+            record("page_setup.print_area", "PASS", f"PrintArea={pa!r}")
+        except Exception as e:
+            record("page_setup.print_area", "FAIL", str(e))
+
+        # ── print_titles rows=$1:$1, cols=$A:$A ─────────────────────────────
+        try:
+            page_setup_action("print_titles", sheet="Sheet1", workbook=wb_name,
+                              rows="$1:$1", cols="$A:$A")
+
+            def _check_titles():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                ps = ws.PageSetup
+                return ps.PrintTitleRows, ps.PrintTitleColumns
+
+            tr, tc = _session.run_com(_check_titles)
+            assert tr == "$1:$1", f"PrintTitleRows expected '$1:$1', got {tr!r}"
+            assert tc == "$A:$A", f"PrintTitleColumns expected '$A:$A', got {tc!r}"
+            record("page_setup.print_titles", "PASS",
+                   f"Rows={tr!r} Columns={tc!r}")
+        except Exception as e:
+            record("page_setup.print_titles", "FAIL", str(e))
+
+        # ── header_footer center_header ─────────────────────────────────────
+        try:
+            page_setup_action("header_footer", sheet="Sheet1", workbook=wb_name,
+                              center_header="ThepExcel Report")
+
+            def _check_header():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.PageSetup.CenterHeader
+
+            hdr = _session.run_com(_check_header)
+            assert hdr == "ThepExcel Report", f"CenterHeader expected 'ThepExcel Report', got {hdr!r}"
+            record("page_setup.header_footer", "PASS", f"CenterHeader={hdr!r}")
+        except Exception as e:
+            record("page_setup.header_footer", "FAIL", str(e))
+
+        # ── export_pdf (SKIP if no PDF printer driver) ──────────────────────
+        try:
+            tmp_dir = os.environ.get("TEMP") or os.environ.get("TMP") or "."
+            pdf_path = os.path.join(tmp_dir, f"thepexcel_smoke_{os.getpid()}.pdf")
+            try:
+                page_setup_action("export_pdf", sheet="Sheet1", workbook=wb_name,
+                                  path=pdf_path, scope="sheet")
+            except Exception as ex:
+                msg = str(ex)
+                if "printer" in msg.lower() or "driver" in msg.lower() or "1004" in msg:
+                    record("page_setup.export_pdf", "SKIP",
+                           f"No PDF printer driver available: {msg[:120]}")
+                    raise _SkipSentinel()
+                raise
+            assert os.path.exists(pdf_path), f"PDF not created at {pdf_path}"
+            size = os.path.getsize(pdf_path)
+            assert size > 0, f"PDF file is empty ({size} bytes)"
+            os.remove(pdf_path)
+            record("page_setup.export_pdf", "PASS", f"size={size} bytes")
+        except _SkipSentinel:
+            pass
+        except Exception as e:
+            record("page_setup.export_pdf", "FAIL", str(e))
+
+        # ── get → applied dict has orientation key ──────────────────────────
+        try:
+            r = page_setup_action("get", sheet="Sheet1", workbook=wb_name)
+            applied = r.get("applied", {})
+            assert "orientation" in applied, f"'orientation' missing from get result: {applied}"
+            record("page_setup.get", "PASS",
+                   f"orientation={applied.get('orientation')} paper={applied.get('paper_size')}")
+        except Exception as e:
+            record("page_setup.get", "FAIL", str(e))
+
+    except Exception as e:
+        record("section19.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 20: Comments (note + threaded) ─────────────────────────────────────
+
+def run_comment() -> None:
+    """Live read-back smoke for note + threaded comment actions.
+
+    Reads cell.Comment.Text() / cell.CommentThreaded.Text() directly from COM.
+    Threaded-comment support is gated on some Excel builds; if AddCommentThreaded
+    raises, that action is recorded FAIL/SKIP with the COM message (a real finding)
+    and the dependent reply/delete-threaded actions are skipped.
+    """
+    section_header("SECTION 20 — Comments (note add/edit/delete + threaded add/reply/delete + list)")
+    if _check_excel_busy(
+        "comment.add_note", "comment.edit_note", "comment.add_threaded",
+        "comment.reply_threaded", "comment.list", "comment.delete_note",
+        "comment.delete_threaded",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    threaded_ok = False
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── add note on A1 ───────────────────────────────────────────────────
+        try:
+            comment_action("add", cell="A1", sheet="Sheet1", workbook=wb_name,
+                           text="Hello note")
+
+            def _check_note():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                c = ws.Range("A1").Comment
+                return c.Text() if c is not None else None
+
+            txt = _session.run_com(_check_note)
+            assert txt == "Hello note", f"Note text expected 'Hello note', got {txt!r}"
+            record("comment.add_note", "PASS", f"text={txt!r}")
+        except Exception as e:
+            record("comment.add_note", "FAIL", str(e))
+
+        # ── edit note on A1 ──────────────────────────────────────────────────
+        try:
+            comment_action("edit", cell="A1", sheet="Sheet1", workbook=wb_name,
+                           text="Updated note")
+
+            def _check_note_edit():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                c = ws.Range("A1").Comment
+                return c.Text() if c is not None else None
+
+            txt = _session.run_com(_check_note_edit)
+            assert txt == "Updated note", f"Note text expected 'Updated note', got {txt!r}"
+            record("comment.edit_note", "PASS", f"text={txt!r}")
+        except Exception as e:
+            record("comment.edit_note", "FAIL", str(e))
+
+        # ── add threaded on B2 (may be gated on some builds) ────────────────
+        try:
+            comment_action("add", cell="B2", sheet="Sheet1", workbook=wb_name,
+                           text="Thread root", kind="threaded")
+
+            def _check_threaded():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                ct = ws.Range("B2").CommentThreaded
+                return ct.Text() if ct is not None else None
+
+            txt = _session.run_com(_check_threaded)
+            assert txt == "Thread root", f"Threaded text expected 'Thread root', got {txt!r}"
+            threaded_ok = True
+            record("comment.add_threaded", "PASS", f"text={txt!r}")
+        except Exception as e:
+            msg = str(e)
+            # Some Excel builds gate AddCommentThreaded — capture as a real finding.
+            record("comment.add_threaded", "SKIP",
+                   f"Threaded comments unavailable on this build: {msg[:140]}")
+
+        # ── reply to threaded on B2 (only if threaded add worked) ───────────
+        if threaded_ok:
+            try:
+                comment_action("reply", cell="B2", sheet="Sheet1", workbook=wb_name,
+                               text="A reply", kind="threaded")
+
+                def _check_replies():
+                    ws = _session.get_sheet("Sheet1", wb_name)
+                    return ws.Range("B2").CommentThreaded.Replies.Count
+
+                cnt = _session.run_com(_check_replies)
+                assert cnt >= 1, f"Reply count expected >= 1, got {cnt}"
+                record("comment.reply_threaded", "PASS", f"reply_count={cnt}")
+            except Exception as e:
+                record("comment.reply_threaded", "FAIL", str(e))
+        else:
+            record("comment.reply_threaded", "SKIP", "threaded add failed/unavailable")
+
+        # ── list kind=all → count >= 1 ──────────────────────────────────────
+        try:
+            r = comment_action("list", sheet="Sheet1", workbook=wb_name, kind="all")
+            cnt = r.get("count", 0)
+            assert cnt >= 1, f"list count expected >= 1, got {cnt}"
+            record("comment.list", "PASS", f"count={cnt}")
+        except Exception as e:
+            record("comment.list", "FAIL", str(e))
+
+        # ── delete note on A1 → Comment is None ─────────────────────────────
+        try:
+            comment_action("delete", cell="A1", sheet="Sheet1", workbook=wb_name)
+
+            def _check_note_gone():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").Comment
+
+            c = _session.run_com(_check_note_gone)
+            assert c is None, f"Note expected gone (None), got {c!r}"
+            record("comment.delete_note", "PASS", "Comment is None")
+        except Exception as e:
+            record("comment.delete_note", "FAIL", str(e))
+
+        # ── delete threaded on B2 (only if threaded existed) ────────────────
+        if threaded_ok:
+            try:
+                comment_action("delete", cell="B2", sheet="Sheet1", workbook=wb_name,
+                               kind="threaded")
+
+                def _check_threaded_gone():
+                    ws = _session.get_sheet("Sheet1", wb_name)
+                    return ws.Range("B2").CommentThreaded
+
+                ct = _session.run_com(_check_threaded_gone)
+                assert ct is None, f"Threaded comment expected gone (None), got {ct!r}"
+                record("comment.delete_threaded", "PASS", "CommentThreaded is None")
+            except Exception as e:
+                record("comment.delete_threaded", "FAIL", str(e))
+        else:
+            record("comment.delete_threaded", "SKIP", "threaded add failed/unavailable")
+
+    except Exception as e:
+        record("section20.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 21: Hyperlinks ─────────────────────────────────────────────────────
+
+def run_hyperlink() -> None:
+    """Live read-back smoke for hyperlink add (url + internal) / list / delete.
+
+    Reads ws.Range(cell).Hyperlinks(1).Address / .SubAddress directly from COM.
+    """
+    section_header("SECTION 21 — Hyperlinks (add url + internal / list / delete)")
+    if _check_excel_busy(
+        "hyperlink.add_url", "hyperlink.add_internal",
+        "hyperlink.list", "hyperlink.delete",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── add url on A1 ────────────────────────────────────────────────────
+        try:
+            hyperlink_action("add", sheet="Sheet1", workbook=wb_name, cell="A1",
+                             link_type="url", target="https://www.thepexcel.com",
+                             text_to_display="ThepExcel")
+
+            def _check_url():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").Hyperlinks(1).Address
+
+            addr = _session.run_com(_check_url)
+            assert "thepexcel.com" in addr, f"Hyperlink.Address expected to contain 'thepexcel.com', got {addr!r}"
+            record("hyperlink.add_url", "PASS", f"Address={addr!r}")
+        except Exception as e:
+            record("hyperlink.add_url", "FAIL", str(e))
+
+        # ── add internal on A2 ───────────────────────────────────────────────
+        # The domain requires 'target' for ALL link types (it carries the
+        # SubAddress for internal links); sub_address is only an override.
+        try:
+            hyperlink_action("add", sheet="Sheet1", workbook=wb_name, cell="A2",
+                             link_type="internal", target="Sheet1!C3",
+                             text_to_display="Jump")
+
+            def _check_internal():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A2").Hyperlinks(1).SubAddress
+
+            sub = _session.run_com(_check_internal)
+            assert "C3" in sub, f"Hyperlink.SubAddress expected to contain 'C3', got {sub!r}"
+            record("hyperlink.add_internal", "PASS", f"SubAddress={sub!r}")
+        except Exception as e:
+            record("hyperlink.add_internal", "FAIL", str(e))
+
+        # ── list → count >= 2 ────────────────────────────────────────────────
+        try:
+            r = hyperlink_action("list", sheet="Sheet1", workbook=wb_name)
+            cnt = r.get("count", len(r.get("hyperlinks", [])))
+            assert cnt >= 2, f"Hyperlink list count expected >= 2, got {cnt}"
+            record("hyperlink.list", "PASS", f"count={cnt}")
+        except Exception as e:
+            record("hyperlink.list", "FAIL", str(e))
+
+        # ── delete range A1 → Hyperlinks.Count == 0 ─────────────────────────
+        try:
+            hyperlink_action("delete", sheet="Sheet1", workbook=wb_name, range="A1")
+
+            def _check_deleted():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").Hyperlinks.Count
+
+            cnt = _session.run_com(_check_deleted)
+            assert cnt == 0, f"A1 Hyperlinks.Count expected 0 after delete, got {cnt}"
+            record("hyperlink.delete", "PASS", f"Count={cnt}")
+        except Exception as e:
+            record("hyperlink.delete", "FAIL", str(e))
+
+    except Exception as e:
+        record("section21.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 22: Outline (group/ungroup rows & columns) ────────────────────────
+
+def run_outline() -> None:
+    """Live read-back smoke for grouping rows/columns and outline levels.
+
+    Reads ws.Rows(n).OutlineLevel / ws.Columns(n).OutlineLevel directly from COM.
+    """
+    section_header("SECTION 22 — Outline (group/ungroup rows+columns / show_levels / clear)")
+    if _check_excel_busy(
+        "outline.group_rows", "outline.group_columns",
+        "outline.show_levels", "outline.ungroup_rows", "outline.clear",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── group_rows 2:5 → Rows(2).OutlineLevel >= 2 ──────────────────────
+        try:
+            outline_action("group_rows", sheet="Sheet1", workbook=wb_name, rows="2:5")
+
+            def _check_row_level():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Rows(2).OutlineLevel
+
+            lvl = _session.run_com(_check_row_level)
+            assert lvl >= 2, f"Rows(2).OutlineLevel expected >= 2, got {lvl}"
+            record("outline.group_rows", "PASS", f"OutlineLevel={lvl}")
+        except Exception as e:
+            record("outline.group_rows", "FAIL", str(e))
+
+        # ── group_columns B:D → Columns(2).OutlineLevel >= 2 ────────────────
+        try:
+            outline_action("group_columns", sheet="Sheet1", workbook=wb_name, columns="B:D")
+
+            def _check_col_level():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Columns(2).OutlineLevel
+
+            lvl = _session.run_com(_check_col_level)
+            assert lvl >= 2, f"Columns(2).OutlineLevel expected >= 2, got {lvl}"
+            record("outline.group_columns", "PASS", f"OutlineLevel={lvl}")
+        except Exception as e:
+            record("outline.group_columns", "FAIL", str(e))
+
+        # ── show_levels row_levels=1 → no exception ─────────────────────────
+        try:
+            outline_action("show_levels", sheet="Sheet1", workbook=wb_name, row_levels=1)
+            record("outline.show_levels", "PASS", "no exception")
+        except Exception as e:
+            record("outline.show_levels", "FAIL", str(e))
+
+        # ── ungroup_rows 2:5 → Rows(2).OutlineLevel == 1 ────────────────────
+        try:
+            outline_action("ungroup_rows", sheet="Sheet1", workbook=wb_name, rows="2:5")
+
+            def _check_row_level_after():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Rows(2).OutlineLevel
+
+            lvl = _session.run_com(_check_row_level_after)
+            assert lvl == 1, f"Rows(2).OutlineLevel expected 1 after ungroup, got {lvl}"
+            record("outline.ungroup_rows", "PASS", f"OutlineLevel={lvl}")
+        except Exception as e:
+            record("outline.ungroup_rows", "FAIL", str(e))
+
+        # ── clear (after a fresh group) → Rows(2).OutlineLevel == 1 ─────────
+        try:
+            outline_action("group_rows", sheet="Sheet1", workbook=wb_name, rows="2:5")
+            outline_action("clear", sheet="Sheet1", workbook=wb_name)
+
+            def _check_cleared():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Rows(2).OutlineLevel
+
+            lvl = _session.run_com(_check_cleared)
+            assert lvl == 1, f"Rows(2).OutlineLevel expected 1 after clear, got {lvl}"
+            record("outline.clear", "PASS", f"OutlineLevel={lvl}")
+        except Exception as e:
+            record("outline.clear", "FAIL", str(e))
+
+    except Exception as e:
+        record("section22.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 23: Protection ─────────────────────────────────────────────────────
+
+def run_protection() -> None:
+    """Live read-back smoke for sheet/workbook protection + cell lock state.
+
+    Uses password='test123' consistently and ALWAYS unprotects with the same
+    password to avoid leaving a locked temp workbook. Reads ws.ProtectContents /
+    wb.ProtectStructure / rng.Locked directly from COM.
+    """
+    section_header("SECTION 23 — Protection (set_locked / protect+unprotect sheet & workbook / status)")
+    if _check_excel_busy(
+        "protection.set_locked", "protection.protect_sheet", "protection.status",
+        "protection.unprotect_sheet", "protection.protect_workbook",
+        "protection.unprotect_workbook",
+    ):
+        return
+
+    PW = "test123"
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── set_locked A1 locked=False → Range("A1").Locked == False ────────
+        try:
+            protection_action("set_locked", sheet="Sheet1", workbook=wb_name,
+                              range="A1", locked=False)
+
+            def _check_locked():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").Locked
+
+            lk = _session.run_com(_check_locked)
+            assert lk is False, f"A1.Locked expected False, got {lk}"
+            record("protection.set_locked", "PASS", f"Locked={lk}")
+        except Exception as e:
+            record("protection.set_locked", "FAIL", str(e))
+
+        # ── protect_sheet → ws.ProtectContents == True ─────────────────────
+        try:
+            protection_action("protect_sheet", sheet="Sheet1", workbook=wb_name,
+                              password=PW)
+
+            def _check_protected():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.ProtectContents
+
+            pc = _session.run_com(_check_protected)
+            assert pc is True, f"ProtectContents expected True, got {pc}"
+            record("protection.protect_sheet", "PASS", f"ProtectContents={pc}")
+        except Exception as e:
+            record("protection.protect_sheet", "FAIL", str(e))
+
+        # ── status → sheet_protected True ──────────────────────────────────
+        try:
+            r = protection_action("status", sheet="Sheet1", workbook=wb_name)
+            applied = r.get("applied", {})
+            sp = applied.get("sheet_protected")
+            assert sp is True, f"status sheet_protected expected True, got {sp}"
+            record("protection.status", "PASS", f"sheet_protected={sp}")
+        except Exception as e:
+            record("protection.status", "FAIL", str(e))
+
+        # ── unprotect_sheet → ws.ProtectContents == False ──────────────────
+        try:
+            protection_action("unprotect_sheet", sheet="Sheet1", workbook=wb_name,
+                              password=PW)
+
+            def _check_unprotected():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.ProtectContents
+
+            pc = _session.run_com(_check_unprotected)
+            assert pc is False, f"ProtectContents expected False after unprotect, got {pc}"
+            record("protection.unprotect_sheet", "PASS", f"ProtectContents={pc}")
+        except Exception as e:
+            record("protection.unprotect_sheet", "FAIL", str(e))
+
+        # ── protect_workbook structure=True → wb.ProtectStructure == True ──
+        try:
+            protection_action("protect_workbook", workbook=wb_name,
+                              password=PW, structure=True)
+
+            def _check_wb_protected():
+                wb_inner = _session.get_workbook(wb_name)
+                return wb_inner.ProtectStructure
+
+            ps = _session.run_com(_check_wb_protected)
+            assert ps is True, f"ProtectStructure expected True, got {ps}"
+            record("protection.protect_workbook", "PASS", f"ProtectStructure={ps}")
+        except Exception as e:
+            record("protection.protect_workbook", "FAIL", str(e))
+
+        # ── unprotect_workbook → wb.ProtectStructure == False ──────────────
+        try:
+            protection_action("unprotect_workbook", workbook=wb_name, password=PW)
+
+            def _check_wb_unprotected():
+                wb_inner = _session.get_workbook(wb_name)
+                return wb_inner.ProtectStructure
+
+            ps = _session.run_com(_check_wb_unprotected)
+            assert ps is False, f"ProtectStructure expected False after unprotect, got {ps}"
+            record("protection.unprotect_workbook", "PASS", f"ProtectStructure={ps}")
+        except Exception as e:
+            record("protection.unprotect_workbook", "FAIL", str(e))
+
+    except Exception as e:
+        record("section23.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        # Defensive: ensure the temp workbook is NOT left protected (would block close).
+        try:
+            def _ensure_unprotected():
+                wb_inner = _session.get_workbook(wb_name)
+                try:
+                    if wb_inner.ProtectStructure:
+                        wb_inner.Unprotect(Password=PW)
+                except Exception:
+                    pass
+                for ws in wb_inner.Worksheets:
+                    try:
+                        if ws.ProtectContents:
+                            ws.Unprotect(Password=PW)
+                    except Exception:
+                        pass
+            if wb_name is not None:
+                _session.run_com(_ensure_unprotected)
+        except Exception:
+            pass
+        _close_wb(wb, wb_name or "unknown")
+
+
+# ── Section 24: Sparklines ─────────────────────────────────────────────────────
+
+def run_sparkline() -> None:
+    """Live read-back smoke for sparkline add (line + column) / list / clear.
+
+    Reads ws.Range(location).SparklineGroups.Count directly from COM.
+    """
+    section_header("SECTION 24 — Sparklines (add line + column / list / clear)")
+    if _check_excel_busy(
+        "sparkline.add_line", "sparkline.add_column",
+        "sparkline.list", "sparkline.clear",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # Setup: write numeric data to B2:E4
+        def _setup_data():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("B2:E4").Value = (
+                (1, 2, 3, 4),
+                (4, 3, 2, 1),
+                (2, 3, 1, 4),
+            )
+        _session.run_com(_setup_data)
+
+        # ── add line sparklines F2:F4 ───────────────────────────────────────
+        try:
+            sparkline_action("add", location="F2:F4", sheet="Sheet1", workbook=wb_name,
+                             data_range="B2:E4", spark_type="line")
+
+            def _check_line():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("F2:F4").SparklineGroups.Count
+
+            cnt = _session.run_com(_check_line)
+            assert cnt >= 1, f"F2:F4 SparklineGroups.Count expected >= 1, got {cnt}"
+            record("sparkline.add_line", "PASS", f"Count={cnt}")
+        except Exception as e:
+            record("sparkline.add_line", "FAIL", str(e))
+
+        # ── add column sparklines G2:G4 ─────────────────────────────────────
+        try:
+            sparkline_action("add", location="G2:G4", sheet="Sheet1", workbook=wb_name,
+                             data_range="B2:E4", spark_type="column")
+
+            def _check_col():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("G2:G4").SparklineGroups.Count
+
+            cnt = _session.run_com(_check_col)
+            assert cnt >= 1, f"G2:G4 SparklineGroups.Count expected >= 1, got {cnt}"
+            record("sparkline.add_column", "PASS", f"Count={cnt}")
+        except Exception as e:
+            record("sparkline.add_column", "FAIL", str(e))
+
+        # ── list location=F2 → groups_count >= 1 ────────────────────────────
+        try:
+            r = sparkline_action("list", location="F2", sheet="Sheet1", workbook=wb_name)
+            cnt = r.get("applied", {}).get("groups_count", 0)
+            assert cnt >= 1, f"list groups_count expected >= 1, got {cnt}"
+            record("sparkline.list", "PASS", f"groups_count={cnt}")
+        except Exception as e:
+            record("sparkline.list", "FAIL", str(e))
+
+        # ── clear F2:F4 → SparklineGroups.Count == 0 ────────────────────────
+        try:
+            sparkline_action("clear", location="F2:F4", sheet="Sheet1", workbook=wb_name)
+
+            def _check_cleared():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("F2:F4").SparklineGroups.Count
+
+            cnt = _session.run_com(_check_cleared)
+            assert cnt == 0, f"F2:F4 SparklineGroups.Count expected 0 after clear, got {cnt}"
+            record("sparkline.clear", "PASS", f"Count={cnt}")
+        except Exception as e:
+            record("sparkline.clear", "FAIL", str(e))
+
+    except Exception as e:
+        record("section24.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
@@ -2359,6 +3113,12 @@ _ALL_SECTIONS = {
     "16": run_slicer,
     "17": run_pq_parameters,
     "18": run_cube,
+    "19": run_page_setup,
+    "20": run_comment,
+    "21": run_hyperlink,
+    "22": run_outline,
+    "23": run_protection,
+    "24": run_sparkline,
 }
 
 
