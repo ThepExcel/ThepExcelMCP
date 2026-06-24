@@ -329,6 +329,28 @@ class TestIsLambda:
         assert self._fn("") is False
 
 
+class TestLambdaHint:
+    """_lambda_hint appends actionable guidance only for LAMBDA formulas."""
+
+    def setup_method(self):
+        from thepexcel_mcp.domains.names import _lambda_hint
+        self._fn = _lambda_hint
+
+    def test_lambda_gets_hint(self):
+        hint = self._fn("=LAMBDA(q1, q2, q1+q2)")
+        assert "cell reference" in hint
+        assert "_xlpm" in hint
+
+    def test_non_lambda_no_hint(self):
+        assert self._fn("=Sheet1!$A$1") == ""
+        assert self._fn("=42") == ""
+
+    def test_hint_is_string(self):
+        # never None — safe to concatenate into an error message
+        assert isinstance(self._fn("=LAMBDA(x,x)"), str)
+        assert isinstance(self._fn("=1"), str)
+
+
 class TestNameInfo:
     """_name_info extracts correct fields from a mock Name COM object."""
 

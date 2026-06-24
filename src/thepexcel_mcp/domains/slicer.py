@@ -173,11 +173,16 @@ def _add(wb, source, field, sheet, caption, name,
 
     try:
         # Add2(Source, SourceField, Name, SlicerCacheType)
-        # Name is optional — pass it only when explicitly supplied
+        # CRITICAL: Name is optional, but it must be truly OMITTED when not
+        # supplied — passing an empty string "" (or None) for Name raises COM
+        # E_INVALIDARG (-2147024809), same failure class as the Slicers.Add
+        # Level slot below. When no name is given, skip the Name positional and
+        # pass SlicerCacheType as a keyword so pywin32 leaves Name unset (Excel
+        # then auto-names the cache "Slicer_<field>").
         if name:
             sc = wb.SlicerCaches.Add2(src_obj, field, name, cache_type)
         else:
-            sc = wb.SlicerCaches.Add2(src_obj, field, "", cache_type)
+            sc = wb.SlicerCaches.Add2(src_obj, field, SlicerCacheType=cache_type)
 
         # Add the visual slicer to the destination sheet.
         # Slicers.Add signature: (SlicerDestination, [Level], [Name], [Caption],

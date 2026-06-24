@@ -296,6 +296,37 @@ def _list(workbook: str | None) -> dict:
     return {"pivot_tables": pivots, "count": len(pivots)}
 
 
+def _resolve_dest_sheet(wb, app, dest_sheet, name, workbook):
+    """Resolve (or create) the worksheet a new pivot is placed on.
+
+    - ``dest_sheet is None``  → create a fresh ``Pivot_<name>`` sheet
+      (replacing any existing sheet of that name).
+    - ``dest_sheet`` names an EXISTING sheet → use it.
+    - ``dest_sheet`` names a sheet that does NOT exist yet → create it, rather
+      than raising a confusing "sheet not found": a caller that passes a sheet
+      name clearly wants the pivot placed there (mirrors the omitted-case
+      auto-create). Excel's 31-char sheet-name limit is enforced.
+    """
+    if dest_sheet is None:
+        new_sheet_name = f"Pivot_{name}"[:31]
+        # Remove an existing sheet with the same name first
+        app.DisplayAlerts = False
+        try:
+            wb.Sheets(new_sheet_name).Delete()
+        except Exception:
+            pass
+        app.DisplayAlerts = True
+        ws = wb.Sheets.Add()
+        ws.Name = new_sheet_name
+        return ws
+    try:
+        return _session.get_sheet(dest_sheet, workbook)
+    except Exception:
+        ws = wb.Sheets.Add()
+        ws.Name = dest_sheet[:31]
+        return ws
+
+
 def _create(
     name: str,
     source: str,
@@ -320,21 +351,7 @@ def _create(
         source_type = _XL_DATABASE
 
     # Determine destination sheet and cell
-    if dest_sheet is None:
-        # Create a new sheet named "Pivot_<name>" (max 31 chars)
-        new_sheet_name = f"Pivot_{name}"[:31]
-        # Remove existing sheet with same name if any
-        app.DisplayAlerts = False
-        try:
-            wb.Sheets(new_sheet_name).Delete()
-        except Exception:
-            pass
-        app.DisplayAlerts = True
-        dest_ws = wb.Sheets.Add()
-        dest_ws.Name = new_sheet_name
-    else:
-        dest_ws = _session.get_sheet(dest_sheet, workbook)
-
+    dest_ws = _resolve_dest_sheet(wb, app, dest_sheet, name, workbook)
     cell_addr = dest_cell or "A3"
     dest_range = dest_ws.Range(cell_addr)
 

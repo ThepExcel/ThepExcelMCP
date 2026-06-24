@@ -218,9 +218,34 @@ class TestAddSlicer:
         wb, ws, _, lo_objects, _ = _make_wb_mock(listobject_names=["SalesT"])
         _call_slicer("add", mock_session, wb, ws, source="SalesT", field="Region")
         call_args = wb.SlicerCaches.Add2.call_args
-        # 4th positional arg is cache_type
-        cache_type = call_args[0][3]
+        # cache_type is positional[3] when a name is given, else the
+        # SlicerCacheType keyword (no-name path omits the Name slot)
+        cache_type = call_args.kwargs.get(
+            "SlicerCacheType",
+            call_args.args[3] if len(call_args.args) > 3 else None,
+        )
         assert cache_type == 1, f"Expected xlSlicer=1, got {cache_type}"
+
+    def test_add_omits_empty_name_arg(self):
+        """REGRESSION: with no name given, Add2 must OMIT the Name slot.
+
+        Passing Name="" (or None) to SlicerCaches.Add2 raises COM
+        E_INVALIDARG (-2147024809) against a live Excel — a defect a mock
+        cannot surface, so assert the call SHAPE directly: no empty-string /
+        None Name, and SlicerCacheType conveyed as a keyword instead.
+        """
+        mock_session = make_mock_session()
+        wb, ws, _, lo_objects, _ = _make_wb_mock(listobject_names=["SalesT"])
+        _call_slicer("add", mock_session, wb, ws, source="SalesT", field="Region")
+        call_args = wb.SlicerCaches.Add2.call_args
+        positional = call_args.args
+        assert "" not in positional, "Add2 must not receive an empty-string Name"
+        assert len(positional) < 3 or positional[2] not in ("", None), (
+            "Add2 Name slot must be omitted (not empty-string/None) when unnamed"
+        )
+        assert call_args.kwargs.get("SlicerCacheType") == 1, (
+            "cache type must be passed as the SlicerCacheType keyword on the no-name path"
+        )
 
     def test_add_calls_slicers_add_on_returned_cache(self):
         """After Add2, Slicers.Add must be called on the returned SlicerCache."""
@@ -307,7 +332,10 @@ class TestAddTimeline:
             source="SalesPivot", field="OrderDate",
         )
         call_args = wb.SlicerCaches.Add2.call_args
-        cache_type = call_args[0][3]
+        cache_type = call_args.kwargs.get(
+            "SlicerCacheType",
+            call_args.args[3] if len(call_args.args) > 3 else None,
+        )
         assert cache_type == 2, f"Expected xlTimeline=2, got {cache_type}"
 
     def test_add_timeline_result_shape(self):

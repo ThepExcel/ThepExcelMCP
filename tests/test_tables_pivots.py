@@ -200,6 +200,61 @@ class TestPivotActionDispatch:
             self._call(action="read")
 
 
+class TestResolveDestSheet:
+    """_resolve_dest_sheet: omitted → Pivot_<name>; named-existing → reuse;
+    named-but-absent → CREATE (not a 'sheet not found' error)."""
+
+    def _fn(self):
+        from thepexcel_mcp.domains.pivots import _resolve_dest_sheet
+        return _resolve_dest_sheet
+
+    def test_omitted_creates_pivot_named_sheet(self):
+        from unittest.mock import MagicMock, patch
+        wb, app = MagicMock(), MagicMock()
+        new_ws = MagicMock()
+        wb.Sheets.Add.return_value = new_ws
+        with patch("thepexcel_mcp.domains.pivots._session") as sess:
+            ws = self._fn()(wb, app, None, "Sales", None)
+        wb.Sheets.Add.assert_called_once()
+        assert new_ws.Name == "Pivot_Sales"
+        assert ws is new_ws
+        sess.get_sheet.assert_not_called()
+
+    def test_named_existing_sheet_is_reused(self):
+        from unittest.mock import MagicMock, patch
+        wb, app = MagicMock(), MagicMock()
+        existing = MagicMock()
+        with patch("thepexcel_mcp.domains.pivots._session") as sess:
+            sess.get_sheet.return_value = existing
+            ws = self._fn()(wb, app, "Report", "P1", None)
+        assert ws is existing
+        wb.Sheets.Add.assert_not_called()
+
+    def test_named_absent_sheet_is_created(self):
+        """REGRESSION: a named dest_sheet that doesn't exist must be CREATED,
+        not raise 'sheet not found' (the awkward behavior fixed for v0.2)."""
+        from unittest.mock import MagicMock, patch
+        wb, app = MagicMock(), MagicMock()
+        new_ws = MagicMock()
+        wb.Sheets.Add.return_value = new_ws
+        with patch("thepexcel_mcp.domains.pivots._session") as sess:
+            sess.get_sheet.side_effect = Exception("Sheet 'Report' not found")
+            ws = self._fn()(wb, app, "Report", "P1", None)
+        wb.Sheets.Add.assert_called_once()
+        assert new_ws.Name == "Report"
+        assert ws is new_ws
+
+    def test_named_absent_truncated_to_31_chars(self):
+        from unittest.mock import MagicMock, patch
+        wb, app = MagicMock(), MagicMock()
+        new_ws = MagicMock()
+        wb.Sheets.Add.return_value = new_ws
+        with patch("thepexcel_mcp.domains.pivots._session") as sess:
+            sess.get_sheet.side_effect = Exception("not found")
+            self._fn()(wb, app, "S" * 40, "P1", None)
+        assert new_ws.Name == "S" * 31
+
+
 class TestPivotConstants:
     """Verify COM constant values match VBA spec (from sbroenne PivotTableTypes.cs)."""
 

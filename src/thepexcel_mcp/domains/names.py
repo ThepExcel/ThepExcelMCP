@@ -160,6 +160,33 @@ def _get(workbook: str | None, name: str) -> dict:
     return _name_info(n)
 
 
+def _lambda_hint(refers_to: str) -> str:
+    """Actionable guidance appended when a LAMBDA name fails to register.
+
+    Two failure modes seen in practice (Excel surfaces both as a generic
+    "There's a problem with this formula" / "The syntax of this name isn't
+    correct" — neither of which names the real cause):
+
+    1. A parameter name that looks like a cell reference (``q1``, ``x2``,
+       ``c3`` …). Excel parses it as a cell, not a parameter, and rejects the
+       formula. Use parameter names that can't be cell addresses
+       (``val``, ``rate``, ``n``, ``amount``, ``x``, ``y`` …).
+    2. A *previous* failed LAMBDA add can leave hidden ``_xlpm.*`` parameter
+       helper names behind that COM cannot delete; they then break later
+       LAMBDA adds in the SAME workbook even when the new formula is valid.
+       Retry in a fresh workbook (or reopen the file) to clear them.
+    """
+    if not _is_lambda(refers_to):
+        return ""
+    return (
+        " — LAMBDA name failed to register. Common causes: (1) a parameter "
+        "name that looks like a cell reference (e.g. 'q1', 'x2') — rename to "
+        "'val'/'rate'/'n'/'x'; (2) a prior failed LAMBDA add left hidden "
+        "'_xlpm.*' helper names in this workbook that COM can't remove — retry "
+        "in a fresh workbook or reopen the file."
+    )
+
+
 def _set(
     workbook: str | None,
     name: str,
@@ -175,13 +202,15 @@ def _set(
             ws.Names.Add(Name=name, RefersTo=refers_to)
             return {"set": name, "refers_to": refers_to, "scope": scope}
         except Exception as e:
-            raise _session.wrap(e, f"Set sheet-scoped name '{name}' failed")
+            raise _session.wrap(
+                e, f"Set sheet-scoped name '{name}' failed{_lambda_hint(refers_to)}"
+            )
     # Workbook-scoped: wb.Names.Add
     try:
         wb.Names.Add(Name=name, RefersTo=refers_to)
         return {"set": name, "refers_to": refers_to, "scope": "workbook"}
     except Exception as e:
-        raise _session.wrap(e, f"Set name '{name}' failed")
+        raise _session.wrap(e, f"Set name '{name}' failed{_lambda_hint(refers_to)}")
 
 
 def _delete(workbook: str | None, name: str) -> dict:
