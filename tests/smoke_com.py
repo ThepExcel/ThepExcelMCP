@@ -102,11 +102,18 @@ try:
     from thepexcel_mcp.domains.outline    import outline_action
     from thepexcel_mcp.domains.protection import protection_action
     from thepexcel_mcp.domains.sparkline  import sparkline_action
+    from thepexcel_mcp.domains.shapes      import shape_action
+    from thepexcel_mcp.domains.find_replace import find_replace_action
+    from thepexcel_mcp.domains.diff         import diff_action
 except ImportError as e:
     print(f"Import failed: {e}")
     sys.exit(1)
 
 _session = ExcelSession()
+
+
+class _SkipImage(Exception):
+    """Internal control-flow sentinel: skip the add_image sub-test cleanly."""
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -3079,6 +3086,326 @@ def run_sparkline() -> None:
         _close_wb(wb, wb_name or "unknown")
 
 
+def run_shape() -> None:
+    """Live read-back smoke for shapes: add_textbox / add_shape / add_image /
+    list / move / delete.
+
+    Ground truth read directly from COM: ws.Shapes.Count, TextFrame2 text,
+    AutoShapeType, Shape.Left — NOT the tool result dicts.
+    """
+    section_header("SECTION 25 — Shapes (textbox / shape / image / list / move / delete)")
+    if _check_excel_busy(
+        "shape.add_textbox", "shape.add_shape", "shape.add_image",
+        "shape.list", "shape.move", "shape.delete",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    textbox_name = None
+    oval_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        # ── add_textbox B2 ──────────────────────────────────────────────────
+        try:
+            r = shape_action("add_textbox", sheet="Sheet1", workbook=wb_name,
+                             cell="B2", text="Hello box", width=120, height=40)
+            textbox_name = r["applied"]["name"]
+
+            def _check_textbox():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                cnt = ws.Shapes.Count
+                txt = ws.Shapes(textbox_name).TextFrame2.TextRange.Text
+                return cnt, txt
+
+            cnt, txt = _session.run_com(_check_textbox)
+            assert cnt >= 1, f"Shapes.Count expected >= 1, got {cnt}"
+            assert txt == "Hello box", f"textbox text expected 'Hello box', got {txt!r}"
+            record("shape.add_textbox", "PASS", f"name={textbox_name} text={txt!r} count={cnt}")
+        except Exception as e:
+            record("shape.add_textbox", "FAIL", str(e))
+
+        # ── add_shape oval D2 ───────────────────────────────────────────────
+        try:
+            r = shape_action("add_shape", sheet="Sheet1", workbook=wb_name,
+                             shape_type="oval", cell="D2", width=80, height=60)
+            oval_name = r["applied"]["name"]
+
+            def _check_oval():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Shapes.Count, ws.Shapes(oval_name).AutoShapeType
+
+            cnt, ast = _session.run_com(_check_oval)
+            assert cnt >= 2, f"Shapes.Count expected >= 2, got {cnt}"
+            assert ast == 9, f"oval AutoShapeType expected 9 (msoShapeOval), got {ast}"
+            record("shape.add_shape", "PASS", f"name={oval_name} AutoShapeType={ast} count={cnt}")
+        except Exception as e:
+            record("shape.add_shape", "FAIL", str(e))
+
+        # ── add_image F2 (tiny temp PNG) ────────────────────────────────────
+        png_path = None
+        try:
+            try:
+                from PIL import Image
+            except ImportError as ie:
+                record("shape.add_image", "SKIP", f"PIL not available: {ie}")
+                raise _SkipImage()
+
+            png_path = os.path.join(
+                os.environ.get("TEMP", os.environ.get("TMP", ".")),
+                "smoke_shape_img.png",
+            )
+            Image.new("RGB", (12, 12), (212, 168, 75)).save(png_path)
+
+            try:
+                shape_action("add_image", sheet="Sheet1", workbook=wb_name,
+                             filename=png_path, cell="F2", width=-1, height=-1)
+            except Exception as ae:
+                record("shape.add_image", "SKIP", f"AddPicture failed: {ae}")
+                raise _SkipImage()
+
+            def _check_image():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Shapes.Count
+
+            cnt = _session.run_com(_check_image)
+            assert cnt >= 3, f"Shapes.Count expected >= 3 after image, got {cnt}"
+            record("shape.add_image", "PASS", f"count={cnt}")
+        except _SkipImage:
+            pass
+        except Exception as e:
+            record("shape.add_image", "FAIL", str(e))
+        finally:
+            if png_path and os.path.isfile(png_path):
+                try:
+                    os.remove(png_path)
+                except OSError:
+                    pass
+
+        # ── list → count >= 3 (or >= 2 if image skipped) ────────────────────
+        try:
+            r = shape_action("list", sheet="Sheet1", workbook=wb_name)
+            cnt = r["applied"]["count"]
+            assert cnt >= 2, f"list count expected >= 2, got {cnt}"
+            record("shape.list", "PASS", f"count={cnt}")
+        except Exception as e:
+            record("shape.list", "FAIL", str(e))
+
+        # ── move textbox to left=10 top=10 ──────────────────────────────────
+        try:
+            assert textbox_name, "textbox was not created — cannot move"
+            shape_action("move", sheet="Sheet1", workbook=wb_name,
+                         name=textbox_name, left=10, top=10)
+
+            def _check_move():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return float(ws.Shapes(textbox_name).Left)
+
+            left = _session.run_com(_check_move)
+            assert abs(left - 10.0) <= 1.0, f"Left expected ~10, got {left}"
+            record("shape.move", "PASS", f"Left={left}")
+        except Exception as e:
+            record("shape.move", "FAIL", str(e))
+
+        # ── delete oval → count decreases AND name gone ─────────────────────
+        try:
+            assert oval_name, "oval was not created — cannot delete"
+
+            def _count_before():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Shapes.Count
+            before = _session.run_com(_count_before)
+
+            shape_action("delete", sheet="Sheet1", workbook=wb_name, name=oval_name)
+
+            def _check_delete():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                cnt = ws.Shapes.Count
+                gone = True
+                try:
+                    _ = ws.Shapes(oval_name)
+                    gone = False
+                except Exception:
+                    gone = True
+                return cnt, gone
+
+            after, gone = _session.run_com(_check_delete)
+            assert after < before, f"Count expected to decrease from {before}, got {after}"
+            assert gone, f"shape '{oval_name}' still present after delete"
+            record("shape.delete", "PASS", f"count {before}->{after} gone={gone}")
+        except Exception as e:
+            record("shape.delete", "FAIL", str(e))
+
+    except Exception as e:
+        record("section25.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+def run_find_replace() -> None:
+    """Live read-back smoke for find / count / replace.
+
+    Ground truth read from COM cell values after each op, NOT tool dicts alone.
+    """
+    section_header("SECTION 26 — Find / Replace / Count")
+    if _check_excel_busy(
+        "find_replace.count", "find_replace.find",
+        "find_replace.replace", "find_replace.count_whole_cell",
+    ):
+        return
+
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        def _setup_data():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1:A4").Value = (
+                ("apple",), ("banana",), ("apple pie",), ("cherry",),
+            )
+        _session.run_com(_setup_data)
+
+        # ── count "apple" (substring) → 2 ───────────────────────────────────
+        try:
+            r = find_replace_action("count", "apple", scope="sheet",
+                                    look_in="values", match_whole_cell=False,
+                                    workbook=wb_name)
+            cnt = r["applied"]["count"]
+            assert cnt == 2, f"count('apple') expected 2, got {cnt}"
+            record("find_replace.count", "PASS", f"count={cnt}")
+        except Exception as e:
+            record("find_replace.count", "FAIL", str(e))
+
+        # ── find "apple" → 2 matches ────────────────────────────────────────
+        try:
+            r = find_replace_action("find", "apple", scope="sheet",
+                                    look_in="values", workbook=wb_name)
+            total = r["applied"]["total_found"]
+            assert total == 2, f"find('apple') total_found expected 2, got {total}"
+            record("find_replace.find", "PASS", f"total_found={total}")
+        except Exception as e:
+            record("find_replace.find", "FAIL", str(e))
+
+        # ── replace apple -> orange ─────────────────────────────────────────
+        try:
+            r = find_replace_action("replace", "apple", replace_text="orange",
+                                    scope="sheet", look_in="values",
+                                    workbook=wb_name)
+            remaining = r["applied"]["remaining_after"]
+
+            def _check_cells():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("A1").Value, ws.Range("A3").Value
+
+            a1, a3 = _session.run_com(_check_cells)
+            assert a1 == "orange", f"A1 expected 'orange', got {a1!r}"
+            assert a3 == "orange pie", f"A3 expected 'orange pie', got {a3!r}"
+            assert remaining == 0, f"remaining_after expected 0, got {remaining}"
+            record("find_replace.replace", "PASS",
+                   f"A1={a1!r} A3={a3!r} remaining_after={remaining}")
+        except Exception as e:
+            record("find_replace.replace", "FAIL", str(e))
+
+        # ── count "orange" whole-cell → 1 (A1 only, not "orange pie") ────────
+        try:
+            r = find_replace_action("count", "orange", scope="sheet",
+                                    look_in="values", match_whole_cell=True,
+                                    workbook=wb_name)
+            cnt = r["applied"]["count"]
+            assert cnt == 1, f"whole-cell count('orange') expected 1, got {cnt}"
+            record("find_replace.count_whole_cell", "PASS", f"count={cnt}")
+        except Exception as e:
+            record("find_replace.count_whole_cell", "FAIL", str(e))
+
+    except Exception as e:
+        record("section26.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+
+def run_diff() -> None:
+    """Live read-back smoke for diff ranges + diff sheets.
+
+    Ground truth comes from the diff result (a pure-read tool); the input grids
+    are written via COM first.
+    """
+    section_header("SECTION 27 — Diff (ranges / sheets)")
+    if _check_excel_busy("diff.ranges", "diff.sheets"):
+        return
+
+    # ── ranges sub-test (own workbook) ──────────────────────────────────────
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        def _setup_ranges():
+            ws = _session.get_sheet("Sheet1", wb_name)
+            ws.Range("A1:B3").Value = ((1, 2), (3, 4), (5, 6))
+            ws.Range("D1:E3").Value = ((1, 2), (3, 99), (5, 6))
+        _session.run_com(_setup_ranges)
+
+        try:
+            r = diff_action("ranges", left_range="A1:B3", right_range="D1:E3",
+                            compare="value", left_workbook=wb_name,
+                            right_workbook=wb_name)
+            applied = r["applied"]
+            total = applied["total_diffs"]
+            dims = applied["dimensions_match"]
+            diffs = applied["diffs"]
+            assert total == 1, f"total_diffs expected 1, got {total}"
+            assert dims is True, f"dimensions_match expected True, got {dims}"
+            assert len(diffs) == 1, f"diffs list expected 1 entry, got {len(diffs)}"
+            d = diffs[0]
+            assert d["cell"] == "B2", f"diff cell expected B2, got {d['cell']}"
+            assert d["left_value"] == 4, f"left_value expected 4, got {d['left_value']}"
+            assert d["right_value"] == 99, f"right_value expected 99, got {d['right_value']}"
+            record("diff.ranges", "PASS",
+                   f"total={total} dims_match={dims} cell={d['cell']} "
+                   f"L={d['left_value']} R={d['right_value']}")
+        except Exception as e:
+            record("diff.ranges", "FAIL", str(e))
+    except Exception as e:
+        record("section27.ranges.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb, wb_name or "unknown")
+
+    # ── sheets sub-test (separate fresh workbook for clean used-ranges) ──────
+    wb2 = None
+    wb2_name = None
+    try:
+        wb2, wb2_name = _new_wb()
+
+        def _setup_sheets():
+            ws1 = _session.get_sheet("Sheet1", wb2_name)
+            ws1.Range("A1:B2").Value = ((1, 2), (3, 4))
+            wbk = _session.get_workbook(wb2_name)
+            ws2 = wbk.Worksheets.Add(After=wbk.Worksheets(wbk.Worksheets.Count))
+            ws2.Name = "Sheet2"
+            ws2.Range("A1:B2").Value = ((1, 2), (3, 5))
+        _session.run_com(_setup_sheets)
+
+        try:
+            r = diff_action("sheets", left_sheet="Sheet1", right_sheet="Sheet2",
+                            compare="value", left_workbook=wb2_name,
+                            right_workbook=wb2_name)
+            total = r["applied"]["total_diffs"]
+            assert total == 1, f"sheets total_diffs expected 1, got {total}"
+            record("diff.sheets", "PASS", f"total_diffs={total}")
+        except Exception as e:
+            record("diff.sheets", "FAIL", str(e))
+    except Exception as e:
+        record("section27.sheets.setup", "FAIL", str(e))
+        traceback.print_exc()
+    finally:
+        _close_wb(wb2, wb2_name or "unknown")
+
+
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
@@ -3119,6 +3446,9 @@ _ALL_SECTIONS = {
     "22": run_outline,
     "23": run_protection,
     "24": run_sparkline,
+    "25": run_shape,
+    "26": run_find_replace,
+    "27": run_diff,
 }
 
 

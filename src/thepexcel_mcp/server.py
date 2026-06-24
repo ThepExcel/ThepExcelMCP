@@ -13,6 +13,8 @@ from .domains.charts import chart_action
 from .domains.comments import comment_action
 from .domains.conditional_format import conditional_format_action
 from .domains.datamodel import datamodel_action
+from .domains.diff import diff_action
+from .domains.find_replace import find_replace_action
 from .domains.format import format_action
 from .domains.hyperlinks import hyperlink_action
 from .domains.names import name_action
@@ -23,6 +25,7 @@ from .domains.powerquery import powerquery_action
 from .domains.protection import protection_action
 from .domains.ranges import range_action
 from .domains.screenshot import screenshot_action
+from .domains.shapes import shape_action
 from .domains.sheets import sheet_action
 from .domains.slicer import slicer_action
 from .domains.sparkline import sparkline_action
@@ -2338,6 +2341,269 @@ def excel_sparkline(
         spark_type=spark_type,
         marker=marker,
         color=color,
+    )
+
+
+@mcp.tool()
+def excel_shape(
+    action: str,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    cell: str | None = None,
+    left: float | None = None,
+    top: float | None = None,
+    width: float | None = None,
+    height: float | None = None,
+    filename: str | None = None,
+    text: str | None = None,
+    shape_type: str | None = None,
+    name: str | None = None,
+) -> dict:
+    """Add and manage drawing objects (images, text boxes, AutoShapes) on a sheet.
+
+    Positioning is in POINTS (1 inch = 72 pt). Supply either a *cell* anchor
+    (the shape's upper-left snaps to that cell's corner) OR explicit *left* and
+    *top*. Adding a shape returns its generated ``name`` under ``applied`` — use
+    that name to target ``move`` and ``delete``.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``add_image``, ``add_textbox``, ``add_shape``, ``list``,
+        ``delete``, ``move``.
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    cell : str, optional
+        Anchor cell (e.g. ``"B3"``). Takes priority over *left*/*top*.
+    left : float, optional
+        Explicit X position in points (required with *top* when *cell* omitted).
+    top : float, optional
+        Explicit Y position in points.
+    width : float, optional
+        Width in points. Required for ``add_textbox``/``add_shape``. For
+        ``add_image`` pass ``-1`` (or omit) to keep native image width.
+    height : float, optional
+        Height in points (same rules as *width*).
+    filename : str, optional
+        Absolute path to the image file (``add_image`` only).
+    text : str, optional
+        Initial text for ``add_textbox``, or label text for ``add_shape``.
+    shape_type : str, optional
+        AutoShape type for ``add_shape``. Named: ``rectangle``,
+        ``rounded_rectangle``, ``oval``, ``right_arrow``, ``diamond``,
+        ``triangle``, ``hexagon``, ``star``, ``cloud``, ``heart`` — or a raw
+        MsoAutoShapeType integer as a string (e.g. ``"1"``).
+    name : str, optional
+        Target shape name for ``move`` and ``delete``.
+
+    Actions
+    -------
+    add_image
+        Embed an image into the sheet. Requires an absolute *filename*.
+        Example::
+
+            excel_shape(action="add_image", filename="D:/logo.png",
+                        cell="F2", width=-1, height=-1)
+
+    add_textbox
+        Add a horizontal text box. *width*/*height* required.
+        Example::
+
+            excel_shape(action="add_textbox", cell="B2", text="Hello box",
+                        width=120, height=40)
+
+    add_shape
+        Add an AutoShape. *shape_type*, *width*, *height* required.
+        Example::
+
+            excel_shape(action="add_shape", shape_type="oval", cell="D2",
+                        width=80, height=60)
+
+    list
+        Enumerate shapes (name, shape_type, left, top, width, height).
+        Example: ``excel_shape(action="list")``
+
+    move
+        Reposition (and optionally resize) the named shape.
+        Example::
+
+            excel_shape(action="move", name="TextBox 1", left=10, top=10)
+
+    delete
+        Delete the named shape.
+        Example: ``excel_shape(action="delete", name="Oval 2")``
+    """
+    return shape_action(
+        action,
+        sheet=sheet,
+        workbook=workbook,
+        cell=cell,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+        filename=filename,
+        text=text,
+        shape_type=shape_type,
+        name=name,
+    )
+
+
+@mcp.tool()
+def excel_find_replace(
+    action: str,
+    find_text: str,
+    replace_text: str | None = None,
+    scope: str = "sheet",
+    range: str | None = None,
+    sheet: str | None = None,
+    workbook: str | None = None,
+    match_case: bool = False,
+    match_whole_cell: bool = False,
+    look_in: str = "formulas",
+) -> dict:
+    """Find, count, or replace text across a range, sheet, or whole workbook.
+
+    ``look_in`` controls what is searched: ``"formulas"`` (default — matches the
+    underlying formula/literal text, the same as Excel's Find dialog default) or
+    ``"values"`` (matches the displayed/computed value). For replacing literal
+    cell content, ``"values"`` is usually the intuitive choice.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``find``, ``count``, ``replace``.
+    find_text : str
+        Text to search for (REQUIRED).
+    replace_text : str, optional
+        Replacement text. REQUIRED for ``replace``.
+    scope : str, optional
+        ``"sheet"`` (default — entire active/named sheet), ``"range"`` (limited
+        to *range*, which is then required), or ``"workbook"`` (all sheets).
+    range : str, optional
+        Range address when ``scope="range"`` (e.g. ``"A1:A100"``).
+    sheet : str, optional
+        Sheet name. Uses active sheet when omitted.
+    workbook : str, optional
+        Workbook name. Uses active workbook when omitted.
+    match_case : bool, optional
+        Case-sensitive search (default False).
+    match_whole_cell : bool, optional
+        Match the ENTIRE cell content only (default False = substring match).
+    look_in : str, optional
+        ``"formulas"`` (default) or ``"values"``.
+
+    Actions
+    -------
+    find
+        Return matching cell addresses + their current values (capped at 1000,
+        ``truncated`` flag set if more exist).
+        Example::
+
+            excel_find_replace(action="find", find_text="apple",
+                               scope="sheet", look_in="values")
+
+    count
+        Return only the number of matching cells.
+        Example::
+
+            excel_find_replace(action="count", find_text="apple",
+                               match_whole_cell=True, look_in="values")
+
+    replace
+        Replace every match. Reports ``cells_matched_before`` and
+        ``remaining_after`` (0 = fully replaced).
+        Example::
+
+            excel_find_replace(action="replace", find_text="apple",
+                               replace_text="orange", scope="sheet",
+                               look_in="values")
+    """
+    return find_replace_action(
+        action,
+        find_text,
+        replace_text=replace_text,
+        scope=scope,
+        range=range,
+        sheet=sheet,
+        workbook=workbook,
+        match_case=match_case,
+        match_whole_cell=match_whole_cell,
+        look_in=look_in,
+    )
+
+
+@mcp.tool()
+def excel_diff(
+    action: str,
+    left_range: str | None = None,
+    left_sheet: str | None = None,
+    left_workbook: str | None = None,
+    right_range: str | None = None,
+    right_sheet: str | None = None,
+    right_workbook: str | None = None,
+    compare: str = "value",
+    max_diffs: int = 500,
+) -> dict:
+    """Diff two ranges or two whole sheets, reporting cell-level differences.
+
+    PURE READ — no mutation. Each difference is reported with the LEFT-side A1
+    cell address, ``left_value``, and ``right_value`` (plus formulas when
+    ``compare`` includes formulas). ``total_diffs`` is the true count even when
+    the returned ``diffs`` list is truncated to *max_diffs*.
+
+    Parameters
+    ----------
+    action : str
+        One of: ``ranges``, ``sheets``.
+    left_range : str, optional
+        Left range address (REQUIRED for ``ranges``), e.g. ``"A1:B3"`` or
+        ``"Sheet1!A1:B3"``.
+    left_sheet : str, optional
+        Sheet for the left side. REQUIRED for ``sheets``.
+    left_workbook : str, optional
+        Workbook for the left side. Uses active workbook when omitted.
+    right_range : str, optional
+        Right range address (REQUIRED for ``ranges``).
+    right_sheet : str, optional
+        Sheet for the right side. REQUIRED for ``sheets``.
+    right_workbook : str, optional
+        Workbook for the right side. Uses active workbook when omitted.
+    compare : str, optional
+        ``"value"`` (default), ``"formula"``, or ``"both"`` (differ if EITHER
+        value or formula differs).
+    max_diffs : int, optional
+        Cap on returned diff entries (default 500).
+
+    Actions
+    -------
+    ranges
+        Compare *left_range* vs *right_range* cell-by-cell. Reports
+        ``dimensions_match`` and the per-cell ``diffs``.
+        Example::
+
+            excel_diff(action="ranges", left_range="A1:B3",
+                       right_range="D1:E3", compare="value")
+
+    sheets
+        Compare two whole sheets over their combined used-range bounding box.
+        Example::
+
+            excel_diff(action="sheets", left_sheet="Sheet1",
+                       right_sheet="Sheet2", compare="value")
+    """
+    return diff_action(
+        action,
+        left_range=left_range,
+        left_sheet=left_sheet,
+        left_workbook=left_workbook,
+        right_range=right_range,
+        right_sheet=right_sheet,
+        right_workbook=right_workbook,
+        compare=compare,
+        max_diffs=max_diffs,
     )
 
 
