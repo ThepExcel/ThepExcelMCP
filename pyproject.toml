@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Windows desktop MCP server — full Excel control via COM (Power Query, PivotTables, Data Model, VBA, dynamic arrays)"
 requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=3.0.0",
+    "fastmcp>=3.4.2,<4",
     "pywin32>=306",
     "pillow>=10.0",
 ]
