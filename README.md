@@ -20,6 +20,23 @@ ThepExcelMCP routes every call through a single STA COM worker thread, so Excel'
 - Python 3.11 or later with [uv](https://docs.astral.sh/uv/) installed
 - Microsoft 365 Excel Desktop (Excel must be **running** before the first tool call, or set `THEPEXCEL_MCP_AUTOLAUNCH=1`)
 
+## Platform support
+
+This server drives a **real Excel process through Windows COM** (`pywin32`), so it is **Windows only by design**:
+
+- ✅ **Windows 10 / 11** — fully supported.
+- ❌ **macOS** — not supported. Excel for Mac does not expose the COM automation API, and `pywin32` does not exist on macOS. There is no workaround; this is a hard platform limitation, not a missing feature.
+- ⚠️ **WSL (Windows Subsystem for Linux)** — the server itself **cannot run inside WSL**, because the Linux Python in WSL has no `pywin32` and no path to Windows COM. But if your MCP client (e.g. Claude Code) runs *inside* WSL, you can still use the server by running it as a **native Windows process** across the WSL ↔ Windows interop boundary:
+  1. Clone and `uv sync` the repo on the **Windows** filesystem (e.g. `C:\Tools\ThepExcelMCP`), using Windows `uv` — not inside the WSL filesystem.
+  2. From your WSL client, register the server so the *command* is the Windows `uv.exe` pointing at that Windows checkout:
+     ```bash
+     claude mcp add thepexcel-excel --scope user -- \
+       uv.exe run --directory 'C:\Tools\ThepExcelMCP' thepexcel-mcp
+     ```
+     The stdio pipes bridge the WSL→Windows process boundary; the server process and Excel both run natively on Windows. Excel must be open in your **Windows** desktop session (WSLg/Linux GUI Excel will not work).
+
+  This WSL path runs the same code on Windows under the hood — it is offered as guidance, not a separately tested install mode. The supported, no-surprises setup is plain Windows.
+
 ## Install
 
 ```bash
@@ -76,6 +93,27 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 ```
 
 Restart Claude Desktop after saving. The server starts on demand when you first call an Excel tool.
+
+## Register with Codex CLI
+
+Codex talks to MCP servers over the same stdio transport, so the server runs unchanged. Add it with the `codex mcp add` command:
+
+```powershell
+codex mcp add thepexcel-excel -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
+```
+
+Or edit `~/.codex/config.toml` directly:
+
+```toml
+[mcp_servers.thepexcel-excel]
+command = "uv"
+args = ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"]
+
+[mcp_servers.thepexcel-excel.env]
+THEPEXCEL_MCP_AUTOLAUNCH = "1"
+```
+
+The `[mcp_servers.thepexcel-excel.env]` table is optional — drop it if you would rather start Excel yourself before the first call.
 
 ## Tools
 
