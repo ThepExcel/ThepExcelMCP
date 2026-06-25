@@ -5,19 +5,25 @@ A Windows MCP server that drives a **live running Excel Desktop instance** via C
 ## Why COM, not a file library?
 
 Libraries such as `openpyxl` read and write the `.xlsx` file on disk, but they
-cannot *operate Excel*. Because ThepExcelMCP drives the real application, it does
-the things that only exist while Excel is actually running:
+cannot *operate Excel*. ThepExcelMCP drives the real application, so an AI can
+**author a complete solution from a blank workbook** — not just tweak a file that
+already exists:
 
-- **Power Query, the whole lifecycle.** Build a query from scratch in a blank
-  workbook, edit the M code of an existing one, create and set query parameters,
-  refresh it against live data sources, and load the result to a worksheet Table —
-  or straight into the Data Model. (A file library cannot evaluate M code at all.)
+- **Build a whole data pipeline end to end, in one tool.** Hand the AI a blank
+  workbook and it can *write* a Power Query in M from scratch, merge and reshape
+  several sources, load the result into a worksheet Table, then build a PivotTable
+  and a chart on top — the entire flow, start to finish. Refreshing an existing
+  query is the trivial part; this *creates* the query, the table, and the pivot.
+- **Power Query, fully editable.** Read and rewrite the M of any existing query,
+  create and set query parameters, refresh against live data sources, and load to a
+  worksheet Table or straight into the Data Model. (A file library cannot evaluate
+  M code at all.)
 - **Data Model & DAX (Power Pivot) that actually calculate.** Add model tables and
   relationships, write and update DAX measures, and have Excel's in-memory engine
   compute them — plus CUBEVALUE / CUBEMEMBER helpers.
-- **PivotTables that really pivot.** Create one from a range, a table, or the Data
-  Model; add, move, and remove fields with real aggregations; set layout; and
-  refresh — every value is computed by Excel, not approximated.
+- **PivotTables that really pivot.** From a range, a table, or the Data Model; add,
+  move, and remove fields with real aggregations; set layout and refresh — every
+  value computed by Excel, not approximated.
 - **Live recalculation.** Dynamic-array spill formulas (`XLOOKUP`, `SORT`,
   `FILTER`), volatile functions, and ordinary formulas are evaluated by Excel's
   calculation engine, and the spilled results can be read back.
