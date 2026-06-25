@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# Pre-push guard for a PUBLIC repo: blocks pushing likely customer / PII data.
+#
+# Enable:        git config core.hooksPath .githooks
+# Bypass once:   ALLOW_SENSITIVE=1 git push ...   (use only for a verified false positive)
+#
+# What it scans: only the lines ADDED by the commits you are about to push
+#                (the hook's own directory, .githooks/, is excluded so its
+#                 pattern definitions do not trip itself).
+# Hard-blocks on:
+#   - any term listed in .sensitive-terms.local  (gitignored; put real client/company names there)
+#   - email addresses other than the maintainer's own / example placeholders
+#   - Thai company markers (the Thai words for "company / limited / public-co")
+# Warns (does not block) on:
+#   - Thai characters in the pushed changes
+#
+set -u
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
+ZERO="0000000000000000000000000000000000000000"
+ALLOW_EMAILS_RE='thepexcel@gmail\.com|@example\.com'
+fail=0
+
+# Collect the added (+) lines across every ref being pushed (stdin: <lref> <lsha> <rref> <rsha>)
+added=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue            # branch deletion
+  if [ "$remote_sha" = "$ZERO" ]; then              # new branch -> diff vs origin/main
+    base="$(git merge-base origin/main "$local_sha" 2>/dev/null || true)"
+    rng="${base:+$base }$local_sha"
+  else
+    rng="$remote_sha $local_sha"
+  fi
+  added+="$(git diff --no-color $rng -- . ':(exclude).githooks/' 2>/dev/null | grep -aE '^\+' | grep -avE '^\+\+\+')"$'\n'
+done
+
+if [ -z "${added// }" ]; then
+  exit 0
+fi
+
+block() { echo "  ✗ $1"; fail=1; }
+
+# 1) local denylist of real names (never committed)
+if [ -f .sensitive-terms.local ]; then
+  while IFS= read -r term; do
+    [ -z "${term// }" ] && continue
+    case "$term" in \#*) continue ;; esac
+    if printf '%s' "$added" | grep -iqaF -- "$term"; then
+      block "denylisted term found in pushed changes: \"$term\""
+    fi
+  done < .sensitive-terms.local
+fi
+
+# 2) foreign emails
+emails="$(printf '%s' "$added" | grep -aoiE '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}' | grep -viE "$ALLOW_EMAILS_RE" | sort -u || true)"
+[ -n "$emails" ] && block "non-maintainer email(s): $(printf '%s' "$emails" | tr '\n' ' ')"
+
+# 3) Thai company markers (บริษัท / จำกัด / มหาชน)
+markers=$'บริษัท|จำกัด|มหาชน'
+if printf '%s' "$added" | grep -qaE "$markers"; then
+  block "Thai company marker in pushed changes"
+fi
+
+# 4) warn: Thai characters present (non-blocking)
+if printf '%s' "$added" | grep -qaP '[\x{0E00}-\x{0E7F}]' 2>/dev/null; then
+  echo "  ⚠ Thai characters present in pushed changes — confirm they are not embedded real-world data."
+fi
+
+if [ "$fail" -ne 0 ]; then
+  if [ "${ALLOW_SENSITIVE:-}" = "1" ]; then
+    echo ""
+    echo "ALLOW_SENSITIVE=1 set — overriding the block above. Make sure this is a real false positive."
+    exit 0
+  fi
+  echo ""
+  echo "Push BLOCKED: potential customer/PII data in your changes (this is a public repo)."
+  echo "Fix the content, or — if this is genuinely a false positive — re-run with: ALLOW_SENSITIVE=1 git push ..."
+  exit 1
+fi
+
+exit 0
