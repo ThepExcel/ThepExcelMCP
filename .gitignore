@@ -41,3 +41,6 @@ desktop.ini
 tmp/
 scratch/
 samples/*.xlsx
+
+# Local-only sensitive-term denylist for the pre-push hook (NEVER commit)
+.sensitive-terms.local

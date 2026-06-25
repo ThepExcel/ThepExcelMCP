@@ -252,6 +252,22 @@ THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py --sections 1,2,3,4
 
 Sections 1–28 cover all tool categories. The full suite runs in roughly 5–10 minutes depending on Excel startup time.
 
+## Acknowledgments
+
+This project stands on the work of others in the Excel-automation and MCP community:
+
+- **[sbroenne/mcp-server-excel](https://github.com/sbroenne/mcp-server-excel)** (MIT) — the primary reference implementation. A number of the Excel COM automation sequences here were studied and ported from this C# project to Python. If you want a mature C#/.NET COM-based Excel MCP server, theirs is excellent.
+- **[lingfan36/ai-office-mcp](https://github.com/lingfan36/ai-office-mcp)** — design inspiration for the snapshot/undo and range-diff tooling.
+- **[haris-musa/excel-mcp-server](https://github.com/haris-musa/excel-mcp-server)** — a reference for MCP tool API design conventions (file-based, `openpyxl`).
+
+Upstream license texts are reproduced in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Contributing
+
+Work on a branch and open a pull request — `main` is protected. Please use
+synthetic data only (this is a public repo) and enable the pre-push safety hook.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 MIT License. Copyright (c) 2026 ThepExcel <thepexcel@gmail.com>.
