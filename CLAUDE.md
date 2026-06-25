@@ -163,6 +163,7 @@ claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMC
 - Auto-launch via `THEPEXCEL_MCP_AUTOLAUNCH=1` env var (launches visible Excel).
 - All COM errors are caught and re-raised as `fastmcp.exceptions.ToolError` with actionable messages.
 - VBA tool opt-in: `THEPEXCEL_MCP_ENABLE_VBA=1` + Excel's AccessVBOM trust setting.
+- **Public repo — synthetic data only (HARDLINE).** This repository is public. `samples/`, tests, docstrings, and doc examples must use **synthetic / anonymized data**: never commit a real customer or company name, real product catalog or model codes, client sales figures, or any third-party business data. Sample datasets must be generic ("Alpha/Beta", "Widget/Gadget", "North/South"). Likewise, keep **internal working notes out of committed docs** — inbox/handoff/memory/vault references and other private-tooling vocabulary belong in private systems, not in files that ship.
 
 ## Future phases
 
