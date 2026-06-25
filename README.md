@@ -2,6 +2,17 @@
 
 A Windows MCP server that drives a **live running Excel Desktop instance** via COM (pywin32), giving AI agents full Excel capability that file-only libraries cannot provide. When an agent calls a tool here, it is talking to the actual Excel process — Power Query queries refresh against live data sources, PivotTables rebuild with real aggregations, charts render to PNG for visual verification, DAX measures execute in the in-memory Data Model, and dynamic-array spill ranges resolve correctly. This is the difference between editing an XML zip file and actually using Excel.
 
+## How it runs — local, not a hosted service
+
+ThepExcelMCP is a **stdio MCP server that runs as a process on your own Windows
+machine** and controls the Excel running there. There is nothing to sign up for, no
+account, and no data leaves your computer. Use it from any MCP client that can
+launch a local stdio server on that same machine:
+
+- ✅ **Claude Code**, **Claude Desktop**, and **Codex CLI** run locally and can launch it.
+- ❌ Cloud-only agent surfaces that can't run a local process on your machine — e.g.
+  **Claude Cowork** today — can't reach your local Excel, so they can't use it.
+
 ## Why COM, not a file library?
 
 Libraries such as `openpyxl` read and write the `.xlsx` file on disk, but they
