@@ -100,13 +100,13 @@ This keeps the verdict at **LOW, not NONE** (correcting the impact-map's over-ro
 
 ---
 
-## Correction note (origin of the alarm — CBV)
+## Why this was initially over-scoped
 
-The original "🔴 high severity, migrate before July 28" framing came from the **nightly research routine** (a confident-beyond-verification pattern):
+An early assessment mistakenly flagged this as "🔴 high severity, migrate before July 28" by conflating ThepExcelMCP's COM `ExcelSession` with the MCP *protocol* session. The four "required actions" it listed are all mis-scoped:
 
-- Inbox item `2026-06-23-thepexcelmcp-mcp-rc-deadline` (severity: high)
-- Memory hot fact `mem-2026-06-24-mcp-rc-2026-07-28`
+1. "audit initialize/initialized handshake code" — this repo has none.
+2. "update error code -32002 → -32602" — never matched here.
+3. "design stateless-compatible COM session strategy" — COM state is process-level, not protocol-level.
+4. "add routing headers to responses" — HTTP-only, and fastmcp owns transport.
 
-That memory fact listed 4 "actions required before July 28" — **all mis-scoped** because it conflated ThepExcelMCP's COM `ExcelSession` with the MCP protocol session: (1) "audit initialize/initialized handshake code" — this repo has none; (2) "update error code -32002→-32602" — never matched here; (3) "design stateless-compatible COM session strategy" — COM state is process-level, not protocol-level; (4) "add 2 routing headers to responses" — HTTP-only, and fastmcp owns transport.
-
-**Recommended follow-ups:** downgrade the inbox item to `severity: low` (operational watch, no code migration) and supersede/correct the memory fact (via `memory_sync.py` — `memory-store/hot/` is single-writer, do not hand-edit). The fact expires 2026-08-01 regardless.
+**Bottom line:** treat the 2026-07-28 RC as an operational watch (keep `fastmcp` current, restart on an RC-ready release), not a code migration.

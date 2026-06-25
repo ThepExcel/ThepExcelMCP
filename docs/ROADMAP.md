@@ -1,7 +1,6 @@
 # ThepExcelMCP — Roadmap & Design Decisions
 
 > Synthesized 2026-06-12 from 3 research streams (landscape / COM feasibility / MCP design).
-> Full research: vault `Inbox/2026-06-12_thepexcel-mcp-landscape.md`, `_excel-com-feasibility.md`, `_mcp-design-and-gaps.md`.
 
 ## Positioning
 
