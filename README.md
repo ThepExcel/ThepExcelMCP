@@ -4,15 +4,34 @@ A Windows MCP server that drives a **live running Excel Desktop instance** via C
 
 ## Why COM, not a file library?
 
-Libraries such as openpyxl read and write the xlsx format, but they cannot:
+Libraries such as `openpyxl` read and write the `.xlsx` file on disk, but they
+cannot *operate Excel*. Because ThepExcelMCP drives the real application, it does
+the things that only exist while Excel is actually running:
 
-- Refresh Power Query connections or trigger M code evaluation
-- Execute DAX measures in the in-memory Data Model (Power Pivot)
-- Recalculate volatile and array formulas through Excel's calculation engine
-- Render range/chart screenshots for an AI agent to see what the sheet looks like
-- Run VBA macros or interact with any live COM add-in
+- **Power Query, the whole lifecycle.** Build a query from scratch in a blank
+  workbook, edit the M code of an existing one, create and set query parameters,
+  refresh it against live data sources, and load the result to a worksheet Table —
+  or straight into the Data Model. (A file library cannot evaluate M code at all.)
+- **Data Model & DAX (Power Pivot) that actually calculate.** Add model tables and
+  relationships, write and update DAX measures, and have Excel's in-memory engine
+  compute them — plus CUBEVALUE / CUBEMEMBER helpers.
+- **PivotTables that really pivot.** Create one from a range, a table, or the Data
+  Model; add, move, and remove fields with real aggregations; set layout; and
+  refresh — every value is computed by Excel, not approximated.
+- **Live recalculation.** Dynamic-array spill formulas (`XLOOKUP`, `SORT`,
+  `FILTER`), volatile functions, and ordinary formulas are evaluated by Excel's
+  calculation engine, and the spilled results can be read back.
+- **Python in Excel.** Insert `=PY()` formulas that run in Excel's Python runtime.
+- **Charts, formatting, and the visual layer** — and capture any range, sheet, or
+  chart as a PNG so the AI can *see* what it just built and verify it.
+- **VBA and the full object model.** Run macros and reach anything COM exposes.
+- **A safety net.** Take a non-destructive snapshot before risky automation, and
+  diff two ranges or sheets to see exactly what changed.
 
-ThepExcelMCP routes every call through a single STA COM worker thread, so Excel's rules for calculation, formatting, and event handling apply exactly as they would for a human user.
+In short: a file library edits a spreadsheet *file*; ThepExcelMCP *uses Excel*.
+Every call runs through a single STA COM worker thread, so Excel's own rules for
+calculation, formatting, and event handling apply exactly as they would for a
+human sitting at the keyboard.
 
 ## Requirements
 
