@@ -1,0 +1,38 @@
+# Continuous integration for ThepExcelMCP.
+#
+# Runs the unit-test suite on every push to main and on every pull request.
+#
+# Why windows-latest: this project drives Excel through Windows COM (pywin32),
+# so its dependencies only install on Windows. The 927 unit tests mock COM and
+# need NO running Excel, so they run cleanly on a hosted Windows runner. The
+# live smoke test (tests/smoke_com.py) is intentionally NOT run here — it needs
+# a real Excel Desktop instance, which GitHub-hosted runners do not provide.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Unit tests (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # setup-uv stopped publishing major/minor tags at v8 for supply-chain
+      # safety, so the version is pinned in full. Bump deliberately.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run unit tests
+        run: uv run pytest -q
