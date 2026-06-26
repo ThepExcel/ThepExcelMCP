@@ -53,8 +53,17 @@ human sitting at the keyboard.
 ## Requirements
 
 - Windows 10 or 11
-- Python 3.11 or later with [uv](https://docs.astral.sh/uv/) installed
 - Microsoft 365 Excel Desktop (Excel must be **running** before the first tool call, or set `THEPEXCEL_MCP_AUTOLAUNCH=1`)
+- [uv](https://docs.astral.sh/uv/) — a fast Python package manager. It installs and
+  manages the right Python version for you, so you do **not** need to install Python
+  separately. If you don't have it yet:
+
+  ```powershell
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+
+  Or via winget: `winget install --id=astral-sh.uv -e`. Close and reopen your
+  terminal afterward so `uv` is on your PATH.
 
 ## Platform support
 
