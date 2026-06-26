@@ -2,6 +2,19 @@
 
 A Windows MCP server that drives a **live running Excel Desktop instance** via COM (pywin32), giving AI agents full Excel capability that file-only libraries cannot provide. When an agent calls a tool here, it is talking to the actual Excel process — Power Query queries refresh against live data sources, PivotTables rebuild with real aggregations, charts render to PNG for visual verification, DAX measures execute in the in-memory Data Model, and dynamic-array spill ranges resolve correctly. This is the difference between editing an XML zip file and actually using Excel.
 
+## Quick start — hand it to your AI agent
+
+Just send this GitHub link to your AI coding agent (Claude Code, Codex CLI, etc.)
+and tell it to take over — it will read this README and set up the MCP server for
+you, as either **user scope** (available in every project) or **project scope**
+(one project only). ❤️
+
+> 🇹🇭 แค่ส่งลิงก์ GitHub นี้ให้ AI Agent ของคุณ แล้วบอกให้ AI จัดการต่อได้เลย จะลง MCP เป็น User Scope หรือ Project Scope ก็ได้ ❤️
+
+```
+https://github.com/ThepExcel/ThepExcelMCP
+```
+
 ## How it runs — local, not a hosted service
 
 ThepExcelMCP is a **stdio MCP server that runs as a process on your own Windows
