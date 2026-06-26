@@ -2,6 +2,19 @@
 
 A Windows MCP server that drives a **live running Excel Desktop instance** via COM (pywin32), giving AI agents full Excel capability that file-only libraries cannot provide. When an agent calls a tool here, it is talking to the actual Excel process — Power Query queries refresh against live data sources, PivotTables rebuild with real aggregations, charts render to PNG for visual verification, DAX measures execute in the in-memory Data Model, and dynamic-array spill ranges resolve correctly. This is the difference between editing an XML zip file and actually using Excel.
 
+## Quick start — hand it to your AI agent
+
+Just send this GitHub link to your AI coding agent (Claude Code, Codex CLI, etc.)
+and tell it to take over — it will read this README and set up the MCP server for
+you, as either **user scope** (available in every project) or **project scope**
+(one project only). ❤️
+
+> 🇹🇭 แค่ส่งลิงก์ GitHub นี้ให้ AI Agent ของคุณ แล้วบอกให้ AI จัดการต่อได้เลย จะลง MCP เป็น User Scope หรือ Project Scope ก็ได้ ❤️
+
+```
+https://github.com/ThepExcel/ThepExcelMCP
+```
+
 ## How it runs — local, not a hosted service
 
 ThepExcelMCP is a **stdio MCP server that runs as a process on your own Windows
@@ -141,13 +154,22 @@ Restart Claude Desktop after saving. The server starts on demand when you first 
 
 ## Register with Codex CLI
 
-Codex talks to MCP servers over the same stdio transport, so the server runs unchanged. Add it with the `codex mcp add` command:
+Codex talks to MCP servers over the same stdio transport, so the server runs
+unchanged. `codex mcp add` writes to your **user-scoped** config
+(`~/.codex/config.toml`), making the server available in every Codex project:
 
 ```powershell
-codex mcp add thepexcel-excel -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
+codex mcp add thepexcel-excel --env THEPEXCEL_MCP_AUTOLAUNCH=1 -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
 ```
 
-Or edit `~/.codex/config.toml` directly:
+Verify it registered:
+
+```powershell
+codex mcp list
+codex mcp get thepexcel-excel
+```
+
+Equivalent manual edit of `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.thepexcel-excel]
@@ -158,7 +180,22 @@ args = ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"]
 THEPEXCEL_MCP_AUTOLAUNCH = "1"
 ```
 
-The `[mcp_servers.thepexcel-excel.env]` table is optional — drop it if you would rather start Excel yourself before the first call.
+Drop the `[mcp_servers.thepexcel-excel.env]` table if you would rather start Excel yourself before the first call.
+
+### Project-scoped (one project only)
+
+To scope the server to a single project instead of globally, add the same
+`[mcp_servers.thepexcel-excel]` block to a `.codex/config.toml` file in that
+project's root. Two caveats:
+
+- `codex mcp add` always writes to the **user** config — there is no CLI flag
+  for project scope, so create/edit `.codex/config.toml` by hand.
+- Codex must **trust the project**, and you must launch Codex from that project
+  root. Project-scoped servers load on the **CLI**; Codex **Desktop** currently
+  ignores project `.codex/config.toml` and reads only the user config
+  ([openai/codex#13025](https://github.com/openai/codex/issues/13025)).
+
+Restart the Codex session after editing config — MCP tools load at session start.
 
 ## Tools
 
