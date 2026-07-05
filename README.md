@@ -66,7 +66,7 @@ human sitting at the keyboard.
 ## Requirements
 
 - Windows 10 or 11
-- Microsoft 365 Excel Desktop (Excel must be **running** before the first tool call, or set `THEPEXCEL_MCP_AUTOLAUNCH=1`)
+- Microsoft 365 Excel Desktop (auto-launched with a blank workbook if not already running; opt out with `THEPEXCEL_MCP_AUTOLAUNCH=0`)
 - [uv](https://docs.astral.sh/uv/) — a fast Python package manager. It installs and
   manages the right Python version for you, so you do **not** need to install Python
   separately. If you don't have it yet:
@@ -266,7 +266,7 @@ There are **26 tools** in total, organized by category.
 
 | Variable | Default | Description |
 |---|---|---|
-| `THEPEXCEL_MCP_AUTOLAUNCH` | unset | Set to `1` to auto-launch a visible Excel instance if none is running. |
+| `THEPEXCEL_MCP_AUTOLAUNCH` | `1` (on) | Auto-launch a visible Excel instance (+ a blank workbook) if none is running. **On by default** — set to a falsy value (`0`/`false`/`no`/`off`) to disable and require Excel be opened manually. |
 | `THEPEXCEL_MCP_ENABLE_VBA` | unset | Set to `1` to enable the `excel_vba` tool. Off by default for security. |
 | `THEPEXCEL_MCP_COM_TIMEOUT` | `120` | Per-call COM timeout in seconds. Increase for slow data refreshes. |
 
@@ -297,8 +297,8 @@ Then invoke it with `/excel-god` in a Claude Code session.
 
 ## Troubleshooting / Known Limitations
 
-**Excel must be running before the first call.**
-The server connects to the first Excel instance visible in the Windows Running Object Table. If Excel is not open, all tool calls will fail with a COM error. Either open Excel manually first, or set `THEPEXCEL_MCP_AUTOLAUNCH=1`.
+**Excel is auto-launched if not already running.**
+The server first attaches to the Excel instance in the Windows Running Object Table; if none is found it auto-launches a visible Excel with a blank workbook (on by default — opt out with `THEPEXCEL_MCP_AUTOLAUNCH=0`). It also self-heals a corrupt win32com `gen_py` early-binding cache (which otherwise raises a `CLSIDToClassMap` `AttributeError` that masquerades as "Excel is not running" even when Excel is open).
 
 **Screenshots and chart image export require a visible Excel window.**
 `excel_screenshot` and `excel_chart(export_image)` use Excel's `CopyPicture` API, which needs the window to be rendered on screen. If Excel is minimized or its window is hidden behind other apps, the captured PNG may come out empty. Keep the Excel window visible when using these tools.

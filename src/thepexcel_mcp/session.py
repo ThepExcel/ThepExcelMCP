@@ -225,22 +225,74 @@ class ExcelSession:
         return _worker.submit(fn, *args, **kwargs)
 
     def get_app(self) -> win32com.client.CDispatch:
-        """Return the running Excel.Application COM object.
+        """Return the running Excel.Application COM object, auto-launching one
+        if none is found.
+
+        Auto-launch is ON by default so tools "just work" when Excel is closed;
+        opt out with a falsy ``THEPEXCEL_MCP_AUTOLAUNCH`` (0/false/no/off).
+
+        Also self-heals a corrupt win32com early-binding cache: a stale
+        ``gen_py`` cache raises ``AttributeError: module '...' has no attribute
+        'CLSIDToClassMap'`` on Dispatch/GetActiveObject *even when Excel is
+        running fine* — which otherwise looks like "Excel is not running". On
+        that error we clear the cache and retry once.
 
         Must be called from within the COM worker thread (i.e. inside a
         callable passed to run_com).
         """
-        try:
+
+        def _clear_gen_py_cache() -> None:
+            try:
+                import shutil
+                import win32com as _w
+
+                shutil.rmtree(_w.__gen_path__, ignore_errors=True)
+            except Exception:
+                pass
+
+        def _attach() -> win32com.client.CDispatch:
             return win32com.client.GetActiveObject("Excel.Application")
+
+        def _launch() -> win32com.client.CDispatch:
+            app = win32com.client.Dispatch("Excel.Application")
+            app.Visible = True
+            # A freshly-launched Excel has no workbook; add a blank one so
+            # get_workbook()/ActiveWorkbook is immediately usable.
+            try:
+                if app.Workbooks.Count == 0:
+                    app.Workbooks.Add()
+            except Exception:
+                pass
+            return app
+
+        # 1) Attach to a running instance. A corrupt gen_py cache can make this
+        #    throw AttributeError even when Excel IS running → clear + retry so
+        #    we reattach to the user's Excel instead of spawning a duplicate.
+        try:
+            return _attach()
+        except AttributeError:
+            _clear_gen_py_cache()
+            try:
+                return _attach()
+            except Exception:
+                pass  # genuinely not running → fall through to auto-launch
         except Exception:
-            if os.environ.get("THEPEXCEL_MCP_AUTOLAUNCH") == "1":
-                app = win32com.client.Dispatch("Excel.Application")
-                app.Visible = True
-                return app
+            pass  # not running / ROT miss → fall through to auto-launch
+
+        # 2) Auto-launch (default on).
+        autolaunch = os.environ.get("THEPEXCEL_MCP_AUTOLAUNCH", "1").strip().lower()
+        if autolaunch in ("0", "false", "no", "off"):
             raise ToolError(
-                "Excel is not running — open Excel first, then retry. "
-                "Or set THEPEXCEL_MCP_AUTOLAUNCH=1 to auto-launch."
+                "Excel is not running and auto-launch is disabled "
+                "(THEPEXCEL_MCP_AUTOLAUNCH is falsy). Open Excel yourself, or "
+                "re-enable auto-launch (unset the var or set it to 1) so the "
+                "tool can open Excel for you."
             )
+        try:
+            return _launch()
+        except AttributeError:
+            _clear_gen_py_cache()
+            return _launch()
 
     def get_workbook(self, workbook: str | None = None) -> win32com.client.CDispatch:
         """Return a Workbook COM object.
