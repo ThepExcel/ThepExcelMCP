@@ -12,7 +12,7 @@ import re
 from fastmcp.exceptions import ToolError
 
 from ..analysis.pq_analyzer import analyze_mcode
-from ..session import ExcelSession
+from ..session import ExcelSession, bulk_guard
 
 _session = ExcelSession()
 
@@ -427,16 +427,21 @@ def _load_to_table(
 
     target_name = (sheet_name or name)[:31]
 
-    # Delete existing sheet with same name (clean slate)
-    app.DisplayAlerts = False
-    try:
-        wb.Sheets(target_name).Delete()
-    except Exception:
-        pass
-    app.DisplayAlerts = True
+    # Sheet-rebuild step: delete-then-add is pure screen/structure churn, not
+    # the PQ refresh itself — safe to wrap in bulk_guard. Never extend this
+    # guard to the connection/refresh steps below (documented deadlock +
+    # async-calc semantics for the PQ engine).
+    with bulk_guard(app):
+        # Delete existing sheet with same name (clean slate)
+        app.DisplayAlerts = False
+        try:
+            wb.Sheets(target_name).Delete()
+        except Exception:
+            pass
+        app.DisplayAlerts = True
 
-    ws = wb.Sheets.Add()
-    ws.Name = target_name
+        ws = wb.Sheets.Add()
+        ws.Name = target_name
 
     # Remove stale connections for this query
     to_delete = []

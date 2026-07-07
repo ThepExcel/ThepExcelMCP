@@ -463,17 +463,27 @@ def _apply_format_options(fmt_obj, decimal_places: int | None, use_thousand_sep:
 _CUBE_ERROR_MARKERS = ("#NAME?", "#GETTING_DATA", "#N/A", "#VALUE!", "#REF!")
 
 
+_XL_CALCULATION_STATE_IDLE = 0  # xlCalculationStateIdle (Excel.XlCalculationState)
+
+
 def _cube_resolve_async(app) -> None:
     """Resolve pending OLAP/OLEDB async queries (#GETTING_DATA -> value).
 
     Primary: app.CalculateUntilAsyncQueriesDone() (Application method, no args).
-    Fallback: PumpWaitingMessages + Calculate loop (40 × 50 ms = 2 s).
+    Fallback: PumpWaitingMessages + Calculate loop (up to 40 × 50 ms = 2 s),
+    with an early exit once CalculationState reports Idle — no need to keep
+    pumping/recalculating once Excel has already settled.
     """
     try:
         app.CalculateUntilAsyncQueriesDone()
     except Exception:
         for _ in range(40):
             pythoncom.PumpWaitingMessages()
+            try:
+                if app.CalculationState == _XL_CALCULATION_STATE_IDLE:
+                    break
+            except Exception:
+                pass
             try:
                 app.Calculate()
             except Exception:

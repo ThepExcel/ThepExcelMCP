@@ -20,6 +20,37 @@ from fastmcp.exceptions import ToolError
 from conftest import make_mock_session
 
 
+# ── _load_to_table: bulk_guard around the sheet-rebuild step only ─────────────
+
+class TestLoadToTableBulkGuard:
+    def test_sheet_rebuild_wrapped_in_bulk_guard(self):
+        from thepexcel_mcp.domains.powerquery import _load_to_table
+
+        wb = MagicMock()
+        app = MagicMock()
+        wb.Application = app
+        wb.Connections.Count = 0
+
+        ws = MagicMock()
+        wb.Sheets.Add.return_value = ws
+        lo = MagicMock()
+        lo.Range.Rows.Count = 11
+        ws.ListObjects.Add.return_value = lo
+
+        mock_session = make_mock_session()
+        mock_session.get_workbook.return_value = wb
+
+        with patch("thepexcel_mcp.domains.powerquery._session", mock_session):
+            with patch("thepexcel_mcp.domains.powerquery.bulk_guard") as bg:
+                bg.return_value.__enter__ = MagicMock(return_value=None)
+                bg.return_value.__exit__ = MagicMock(return_value=False)
+                result = _load_to_table("SalesQuery", None, None)
+
+        bg.assert_called_once_with(app)
+        assert result["loaded"] == "SalesQuery"
+        assert result["rows"] == 10
+
+
 # ── Pure-Python helper tests ──────────────────────────────────────────────────
 
 class TestMEscapeText:

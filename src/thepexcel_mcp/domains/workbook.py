@@ -69,24 +69,23 @@ def _dispatch(action: str, workbook: str | None, path: str | None) -> dict:
 def _list() -> dict:
     app = _session.get_app()
     active_name = app.ActiveWorkbook.Name if app.ActiveWorkbook else None
-    workbooks = [
-        {
-            "name": app.Workbooks(i + 1).Name,
-            "active": app.Workbooks(i + 1).Name == active_name,
-        }
-        for i in range(app.Workbooks.Count)
-    ]
+    workbooks = []
+    for i in range(app.Workbooks.Count):
+        wb = app.Workbooks(i + 1)  # bind once — avoid a second indexed COM call per item
+        workbooks.append({"name": wb.Name, "active": wb.Name == active_name})
     return {"workbooks": workbooks, "count": len(workbooks)}
 
 
 def _info(workbook: str | None) -> dict:
     wb = _session.get_workbook(workbook)
-    # Count sheets
-    sheet_names = [wb.Sheets(i + 1).Name for i in range(wb.Sheets.Count)]
-    # Count tables (ListObjects) across all sheets
-    table_count = sum(
-        wb.Sheets(i + 1).ListObjects.Count for i in range(wb.Sheets.Count)
-    )
+    # Single pass over sheets: bind each sheet once, collect its name AND
+    # ListObjects.Count together (was two separate loops over the same sheets).
+    sheet_names = []
+    table_count = 0
+    for i in range(wb.Sheets.Count):
+        ws = wb.Sheets(i + 1)
+        sheet_names.append(ws.Name)
+        table_count += ws.ListObjects.Count
     # Count queries
     query_count = wb.Queries.Count
     # Count defined names

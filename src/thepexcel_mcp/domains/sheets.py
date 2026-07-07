@@ -53,10 +53,10 @@ def _dispatch(action: str, name: str | None, workbook: str | None, new_name: str
 def _list(workbook: str | None) -> dict:
     wb = _session.get_workbook(workbook)
     active = wb.ActiveSheet.Name if wb.ActiveSheet else None
-    sheets = [
-        {"name": wb.Sheets(i + 1).Name, "active": wb.Sheets(i + 1).Name == active}
-        for i in range(wb.Sheets.Count)
-    ]
+    sheets = []
+    for i in range(wb.Sheets.Count):
+        ws = wb.Sheets(i + 1)  # bind once — avoid a second indexed COM call per item
+        sheets.append({"name": ws.Name, "active": ws.Name == active})
     return {"sheets": sheets, "count": len(sheets)}
 
 

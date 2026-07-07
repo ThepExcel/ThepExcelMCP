@@ -181,8 +181,32 @@ def _require(value, param: str, action: str) -> None:
         raise ToolError(f"action='{action}' requires '{param}'.")
 
 
-def _find_chart(wb, name: str):
-    """Return ChartObject COM object or raise ToolError with available names."""
+def _find_chart(wb, name: str, sheet: str | None = None):
+    """Return ChartObject COM object or raise ToolError with available names.
+
+    Fast path: try the given sheet (if any) then the active sheet directly
+    via ChartObjects(name) — avoids enumerating every sheet/chart when the
+    chart lives where we'd expect it. Falls back to the existing full
+    enumeration (which also builds the not-found error listing) on a miss.
+    """
+    candidates = []
+    if sheet:
+        try:
+            candidates.append(wb.Sheets(sheet))
+        except Exception:
+            pass
+    try:
+        active = wb.ActiveSheet
+        if active is not None:
+            candidates.append(active)
+    except Exception:
+        pass
+    for ws in candidates:
+        try:
+            return ws.ChartObjects(name)
+        except Exception:
+            continue
+
     available = []
     for i in range(1, wb.Sheets.Count + 1):
         ws = wb.Sheets(i)

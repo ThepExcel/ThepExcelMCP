@@ -195,8 +195,32 @@ def _require(value, param: str, action: str) -> None:
         raise ToolError(f"action='{action}' requires '{param}'.")
 
 
-def _find_pivot(wb, name: str):
-    """Return a PivotTable COM object or raise ToolError with available names."""
+def _find_pivot(wb, name: str, sheet: str | None = None):
+    """Return a PivotTable COM object or raise ToolError with available names.
+
+    Fast path: try the given sheet (if any) then the active sheet directly
+    via PivotTables(name) — avoids enumerating every sheet/pivot when the
+    pivot lives where we'd expect it. Falls back to the existing full
+    enumeration (which also builds the not-found error listing) on a miss.
+    """
+    candidates = []
+    if sheet:
+        try:
+            candidates.append(wb.Sheets(sheet))
+        except Exception:
+            pass
+    try:
+        active = wb.ActiveSheet
+        if active is not None:
+            candidates.append(active)
+    except Exception:
+        pass
+    for ws in candidates:
+        try:
+            return ws.PivotTables(name)
+        except Exception:
+            continue
+
     available = []
     for i in range(1, wb.Sheets.Count + 1):
         ws = wb.Sheets(i)
@@ -674,16 +698,35 @@ def _read(name: str, workbook: str | None, offset: int, limit: int) -> dict:
     try:
         # TableRange2 includes page/filter fields at top; TableRange1 is just the body
         rng = pt.TableRange1
-        raw = rng.Value
-        if raw is None:
+        total_rows = rng.Rows.Count
+        total_cols = rng.Columns.Count
+
+        if total_rows == 1 and total_cols == 1 and rng.Value is None:
             return {"values": [], "total_rows": 0, "has_more": False, "next_offset": None}
-        if not isinstance(raw, tuple):
-            raw = ((raw,),)
-        elif raw and not isinstance(raw[0], tuple):
-            raw = (raw,)
-        total_rows = len(raw)
-        page = raw[offset: offset + limit]
-        rows = [list(r) for r in page]
+
+        if offset >= total_rows:
+            rows: list = []
+        else:
+            r1, c1 = rng.Row, rng.Column
+            last_row = r1 + min(offset + limit, total_rows) - 1
+            ws = rng.Parent
+            # Page-scoped read: only marshal the rows this page needs via a
+            # bounded Cells(...) block — was previously rng.Value (the whole
+            # pivot body) sliced in Python per page, O(total_rows) per call.
+            page_rng = ws.Range(
+                ws.Cells(r1 + offset, c1),
+                ws.Cells(last_row, c1 + total_cols - 1),
+            )
+            raw = page_rng.Value
+            if raw is None:
+                rows = []
+            elif not isinstance(raw, tuple):
+                rows = [[raw]]
+            elif raw and not isinstance(raw[0], tuple):
+                rows = [list(raw)]
+            else:
+                rows = [list(r) for r in raw]
+
         has_more = (offset + limit) < total_rows
         return {
             "values": rows,

@@ -141,25 +141,30 @@ def _resolve_range(range_str: str, sheet: str | None, workbook: str | None):
         raise _session.wrap(e, f"Invalid range '{range_str}'")
 
 
-def _extract_values(raw, offset: int, limit: int) -> tuple[list, int]:
-    """Normalise COM value result to list-of-lists, return (page, total_rows)."""
+def _normalize_rows(raw) -> list:
+    """Normalise a COM .Value/.Formula read (already page-sized) to list-of-lists.
+
+    Handles the pywin32 shape contract: None (empty), scalar (1 cell), flat
+    tuple (1 row or 1 col), tuple-of-tuples (N×M block). Truncates long
+    strings same as before. Unlike the old ``_extract_values``, this does NOT
+    slice by offset/limit — the caller is expected to have already read only
+    the page-sized sub-range via a bounded ``Cells(...)`` block.
+    """
     if raw is None:
-        return [], 0
+        return []
     if not isinstance(raw, tuple):
         raw = ((raw,),)
     elif raw and not isinstance(raw[0], tuple):
         raw = (raw,)
-    total_rows = len(raw)
-    page = raw[offset: offset + limit]
     rows = []
-    for row in page:
+    for row in raw:
         cells = []
         for cell in row:
             if isinstance(cell, str) and len(cell) > _MAX_CELL_LEN:
                 cell = cell[:_MAX_CELL_LEN] + "…"
             cells.append(cell)
         rows.append(cells)
-    return rows, total_rows
+    return rows
 
 
 def _read(
@@ -170,10 +175,32 @@ def _read(
     limit: int,
 ) -> dict:
     rng = _resolve_range(range_str, sheet, workbook)
-    raw = rng.Value
-    rows, total_rows = _extract_values(raw, offset, limit)
-    if total_rows == 0:
+    total_rows = rng.Rows.Count
+    total_cols = rng.Columns.Count
+
+    # Legacy quirk (kept for byte-identical response shape): a truly-empty
+    # single cell has Rows.Count==Columns.Count==1 but .Value is None — the
+    # old whole-value read reported that as total_rows=0, not "1 empty row".
+    if total_rows == 1 and total_cols == 1 and rng.Value is None:
         return {"values": [], "total_rows": 0, "has_more": False, "next_offset": 0}
+
+    if offset >= total_rows:
+        rows: list = []
+    else:
+        r1, c1 = rng.Row, rng.Column
+        last_row = r1 + min(offset + limit, total_rows) - 1
+        ws = rng.Parent
+        # Page-scoped read: only marshal the rows this page needs, via an
+        # explicit Cells(...)-bounded block — never .Resize/.Offset (pywin32
+        # indexed-property quirk, see ranges._write) and never the whole
+        # range's .Value (that was O(total_rows) per page — quadratic across
+        # pages for a large range read a page at a time).
+        page_rng = ws.Range(
+            ws.Cells(r1 + offset, c1),
+            ws.Cells(last_row, c1 + total_cols - 1),
+        )
+        rows = _normalize_rows(page_rng.Value)
+
     has_more = (offset + limit) < total_rows
     result = {
         "values": rows,
@@ -212,12 +239,40 @@ def _is_spill_anchor(cell) -> bool:
         return False
 
 
+_SPILL_SCAN_CAP = 999  # max offset from anchor; matches the old linear scan's
+                        # 1000-cell cap (offsets 0..999, offset 0 == the anchor).
+
+
+def _scan_spill_extent(is_true, cap: int = _SPILL_SCAN_CAP) -> int:
+    """Return the largest offset (>=0) for which ``is_true(offset)`` holds.
+
+    Precondition: ``is_true(0)`` is already known True (the anchor itself).
+    Exponential probe (1, 2, 4, ...) brackets the True/False boundary, then a
+    binary search narrows it down — same result as checking every offset
+    0..cap linearly, but O(log cap) calls to ``is_true`` instead of O(cap).
+    """
+    lo, probe = 0, 1
+    while probe <= cap and is_true(probe):
+        lo = probe
+        probe *= 2
+    hi = min(probe, cap + 1)
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if mid <= cap and is_true(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 def _spill_range_address(anchor) -> str:
     """Return the address of the full spill range from an anchor cell.
 
     SpillingRange is not reliably accessible via pywin32 late-binding
     (returns None on some Excel builds despite HasSpill=True).
-    Fallback: scan outward from the anchor via HasSpill flags.
+    Fallback: exponential-probe + binary-search outward from the anchor via
+    HasSpill flags (same 1000-cell cap and result as the old linear scan,
+    with O(log n) COM round-trips instead of O(n)).
     """
     # First try the COM property directly
     try:
@@ -227,32 +282,33 @@ def _spill_range_address(anchor) -> str:
     except Exception:
         pass
 
-    # Fallback: scan rows then columns while HasSpill is True
     ws = anchor.Parent
     anchor_row = anchor.Row
     anchor_col = anchor.Column
 
-    # Find last spill row (scan down)
-    max_row = anchor_row
-    try:
-        for r in range(anchor_row, anchor_row + 1000):
-            cell = ws.Cells(r, anchor_col)
-            if not cell.HasSpill:
-                break
-            max_row = r
-    except Exception:
-        pass
+    def _row_has_spill(offset: int) -> bool:
+        try:
+            return bool(ws.Cells(anchor_row + offset, anchor_col).HasSpill)
+        except Exception:
+            return False
 
-    # Find last spill column (scan right)
-    max_col = anchor_col
+    def _col_has_spill(offset: int) -> bool:
+        try:
+            return bool(ws.Cells(anchor_row, anchor_col + offset).HasSpill)
+        except Exception:
+            return False
+
     try:
-        for c in range(anchor_col, anchor_col + 1000):
-            cell = ws.Cells(anchor_row, c)
-            if not cell.HasSpill:
-                break
-            max_col = c
+        row_extent = _scan_spill_extent(_row_has_spill)
     except Exception:
-        pass
+        row_extent = 0
+    max_row = anchor_row + row_extent
+
+    try:
+        col_extent = _scan_spill_extent(_col_has_spill)
+    except Exception:
+        col_extent = 0
+    max_col = anchor_col + col_extent
 
     end_cell = ws.Cells(max_row, max_col)
     return ws.Range(anchor, end_cell).Address
@@ -296,8 +352,28 @@ def _read_spill(
     spill_addr = _spill_range_address(anchor_cell)
     ws = anchor_cell.Parent
     spill_rng = ws.Range(spill_addr)
-    raw = spill_rng.Value
-    rows, total_rows = _extract_values(raw, offset, limit)
+
+    total_rows = spill_rng.Rows.Count
+    total_cols = spill_rng.Columns.Count
+    if total_rows == 1 and total_cols == 1 and spill_rng.Value is None:
+        return {
+            "anchor": anchor_cell.Address,
+            "spill_range": spill_addr,
+            "values": [],
+            "total_rows": 0,
+            "has_more": False,
+            "next_offset": 0,
+        }
+    if offset >= total_rows:
+        rows: list = []
+    else:
+        r1, c1 = spill_rng.Row, spill_rng.Column
+        last_row = r1 + min(offset + limit, total_rows) - 1
+        page_rng = ws.Range(
+            ws.Cells(r1 + offset, c1),
+            ws.Cells(last_row, c1 + total_cols - 1),
+        )
+        rows = _normalize_rows(page_rng.Value)
     has_more = (offset + limit) < total_rows
     return {
         "anchor": anchor_cell.Address,

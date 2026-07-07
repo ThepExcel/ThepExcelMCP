@@ -455,9 +455,18 @@ class TestReadSpillHelper:
         anchor = MagicMock()
         anchor.HasSpill = has_spill
         if has_spill:
+            vals = spill_values or [1, 2, 3]
             spill_rng = MagicMock()
             spill_rng.Address = "$E$1:$E$5"
-            spill_rng.Value = tuple((v,) for v in (spill_values or [1, 2, 3]))
+            spill_rng.Value = tuple((v,) for v in vals)
+            # Page-scoped _read_spill needs range metadata: single column (E),
+            # one row per value. ws.Range(...) returns this same mock for BOTH
+            # the spill_addr lookup AND the page sub-range build below, so its
+            # .Value (the full tuple) is what the page read sees either way.
+            spill_rng.Rows.Count = len(vals)
+            spill_rng.Columns.Count = 1
+            spill_rng.Row = 1
+            spill_rng.Column = 5
             anchor.SpillingRange = spill_rng
             # _read_spill now uses _spill_range_address → ws.Range(addr)
             # so anchor.Parent.Range() must return the same spill_rng

@@ -237,6 +237,7 @@ def _build_diffs(
     cols = min(n_cols_l, n_cols_r)
 
     all_diffs: list[dict] = []
+    total_diffs = 0
 
     for i in range(rows):
         row_l = left_values[i]
@@ -251,21 +252,25 @@ def _build_diffs(
             rf = rf_row[j] if (rf_row is not None and j < len(rf_row)) else None
 
             if _cell_differs(lv, rv, lf, rf, compare):
-                entry: dict = {
-                    "cell": _offset_to_a1(base_row, base_col, i, j),
-                    "row": i,
-                    "col": j,
-                    "left_value": lv,
-                    "right_value": rv,
-                }
-                if compare in ("formula", "both"):
-                    entry["left_formula"] = lf
-                    entry["right_formula"] = rf
-                all_diffs.append(entry)
+                total_diffs += 1
+                # Keep counting every mismatch (total_diffs above), but stop
+                # growing the returned list once it hits max_diffs — avoids
+                # O(total_diffs) memory when the output is capped anyway.
+                if len(all_diffs) < max_diffs:
+                    entry: dict = {
+                        "cell": _offset_to_a1(base_row, base_col, i, j),
+                        "row": i,
+                        "col": j,
+                        "left_value": lv,
+                        "right_value": rv,
+                    }
+                    if compare in ("formula", "both"):
+                        entry["left_formula"] = lf
+                        entry["right_formula"] = rf
+                    all_diffs.append(entry)
 
-    total_diffs = len(all_diffs)
     truncated = total_diffs > max_diffs
-    return all_diffs[:max_diffs], total_diffs, truncated
+    return all_diffs, total_diffs, truncated
 
 
 # ── Action implementations ────────────────────────────────────────────────────
@@ -366,6 +371,19 @@ def _diff_ranges(
     return {"diff": "ranges", "applied": applied}
 
 
+def _sheet_from_workbook(wb, name: str | None):
+    """Return a Worksheet from an already-resolved wb (mirrors
+    ExcelSession.get_sheet's behavior/error format) without a second
+    get_workbook() round-trip for the same workbook."""
+    if name is None:
+        return wb.ActiveSheet
+    try:
+        return wb.Sheets(name)
+    except Exception:
+        available = [wb.Sheets(i + 1).Name for i in range(wb.Sheets.Count)]
+        raise ToolError(f"Sheet '{name}' not found. Available: {available}")
+
+
 def _diff_sheets(
     left_sheet: str | None,
     left_workbook: str | None,
@@ -385,8 +403,16 @@ def _diff_sheets(
         raise ToolError("sheets action requires 'right_sheet'.")
 
     try:
-        l_ws = _session.get_sheet(left_sheet, left_workbook)
-        r_ws = _session.get_sheet(right_sheet, right_workbook)
+        if left_workbook == right_workbook:
+            # Same workbook on both sides — resolve it ONCE instead of twice
+            # (get_sheet() would otherwise call get_workbook() a second time
+            # for the identical workbook).
+            wb = _session.get_workbook(left_workbook)
+            l_ws = _sheet_from_workbook(wb, left_sheet)
+            r_ws = _sheet_from_workbook(wb, right_sheet)
+        else:
+            l_ws = _session.get_sheet(left_sheet, left_workbook)
+            r_ws = _session.get_sheet(right_sheet, right_workbook)
     except ToolError:
         raise
     except Exception as e:

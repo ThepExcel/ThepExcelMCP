@@ -570,6 +570,9 @@ class TestRangesAction:
 
 class TestSheetsAction:
     def _make_sheet_session(self, l_ws, r_ws, ms):
+        """Wire both get_sheet (legacy path) and get_workbook (the new
+        same-workbook fast path _diff_sheets takes when left_workbook ==
+        right_workbook, both None by default in these tests)."""
         call_count = [0]
 
         def get_sheet(name, workbook):
@@ -577,6 +580,14 @@ class TestSheetsAction:
             return l_ws if call_count[0] <= 1 else r_ws
 
         ms.get_sheet.side_effect = get_sheet
+
+        wb = MagicMock()
+
+        def sheets_lookup(name):
+            return l_ws if name == l_ws.Name else r_ws
+
+        wb.Sheets.side_effect = sheets_lookup
+        ms.get_workbook.return_value = wb
 
     def test_identical_sheets_no_diffs(self):
         ms = make_mock_session()
@@ -697,6 +708,51 @@ class TestSheetsAction:
         assert result["applied"]["total_diffs"] == 9
         assert result["applied"]["truncated"] is True
         assert len(result["applied"]["diffs"]) == 4
+
+    def test_same_workbook_resolves_workbook_once(self):
+        """When left_workbook == right_workbook (both None here), _diff_sheets
+        must resolve the workbook via get_workbook() ONCE, not call get_sheet()
+        (which internally calls get_workbook()) twice."""
+        ms = make_mock_session()
+        vals = ((1, 2), (3, 4))
+        l_ws, _ = _make_sheet_mock_with_used_range(
+            "Sheet1", block_value=vals, block_formula=vals,
+            ur_rows_count=2, ur_cols_count=2,
+        )
+        r_ws, _ = _make_sheet_mock_with_used_range(
+            "Sheet2", block_value=vals, block_formula=vals,
+            ur_rows_count=2, ur_cols_count=2,
+        )
+        self._make_sheet_session(l_ws, r_ws, ms)
+
+        _call_diff("sheets", ms, left_sheet="Sheet1", right_sheet="Sheet2")
+
+        ms.get_workbook.assert_called_once_with(None)
+        ms.get_sheet.assert_not_called()
+
+    def test_different_workbooks_still_uses_get_sheet_per_side(self):
+        """When left_workbook != right_workbook, the original per-side
+        get_sheet() resolution must still be used (no same-workbook fast path)."""
+        ms = make_mock_session()
+        vals = ((1, 2), (3, 4))
+        l_ws, _ = _make_sheet_mock_with_used_range(
+            "Sheet1", block_value=vals, block_formula=vals,
+            ur_rows_count=2, ur_cols_count=2,
+        )
+        r_ws, _ = _make_sheet_mock_with_used_range(
+            "Sheet2", block_value=vals, block_formula=vals,
+            ur_rows_count=2, ur_cols_count=2,
+        )
+        self._make_sheet_session(l_ws, r_ws, ms)
+
+        _call_diff(
+            "sheets", ms,
+            left_sheet="Sheet1", left_workbook="A.xlsx",
+            right_sheet="Sheet2", right_workbook="B.xlsx",
+        )
+
+        assert ms.get_sheet.call_count == 2
+        ms.get_workbook.assert_not_called()
 
 
 # ── Result shape contract ──────────────────────────────────────────────────────

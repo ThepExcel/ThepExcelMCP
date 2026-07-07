@@ -99,7 +99,9 @@ def _copy_picture_to_file(rng, output_path: str | None, label: str) -> str:
     path = os.path.abspath(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    app = _session.get_app()
+    # rng already carries a reference to the live Application — reuse it
+    # instead of a second _session.get_app() resolution.
+    app = rng.Application
     # Clear clipboard before copy to avoid stale data
     app.CutCopyMode = False
 

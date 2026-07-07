@@ -127,6 +127,56 @@ class TestScreenshotActionDispatch:
             self._call(action="chart")
 
 
+# ── _copy_picture_to_file: reuse rng.Application (no second get_app) ──────────
+
+class TestCopyPictureReusesRngApplication:
+    def test_uses_rng_application_not_get_app(self, tmp_path):
+        from thepexcel_mcp.domains.screenshot import _copy_picture_to_file
+
+        rng = MagicMock()
+        app = MagicMock()
+        rng.Application = app
+
+        fake_img = MagicMock()
+        out_path = str(tmp_path / "shot.png")
+
+        with patch("thepexcel_mcp.domains.screenshot._session") as mock_session:
+            with patch("PIL.ImageGrab.grabclipboard", return_value=fake_img):
+                result_path = _copy_picture_to_file(rng, out_path, "label")
+
+            mock_session.get_app.assert_not_called()
+
+        rng.CopyPicture.assert_called_once()
+        assert app.CutCopyMode is False
+        fake_img.save.assert_called_once_with(result_path, "PNG")
+
+
+# ── _find_chart fast path ──────────────────────────────────────────────────────
+
+class TestFindChartFastPath:
+    def test_active_sheet_hit_skips_full_enumeration(self):
+        from thepexcel_mcp.domains.charts import _find_chart
+
+        wb = MagicMock()
+        target_co = MagicMock()
+        wb.ActiveSheet.ChartObjects.return_value = target_co
+        wb.Sheets.side_effect = AssertionError("full enumeration must not run")
+
+        result = _find_chart(wb, "Chart 1")
+
+        assert result is target_co
+
+    def test_fast_path_miss_falls_back_to_full_enumeration(self):
+        from thepexcel_mcp.domains.charts import _find_chart
+
+        wb = MagicMock()
+        wb.ActiveSheet.ChartObjects.side_effect = Exception("not on active sheet")
+        wb.Sheets.Count = 0
+
+        with pytest.raises(ToolError, match="not found"):
+            _find_chart(wb, "Ghost")
+
+
 # ── write_py escaping ──────────────────────────────────────────────────────────
 
 class TestWritePyEscaping:

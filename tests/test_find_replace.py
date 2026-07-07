@@ -531,6 +531,95 @@ class TestResultShape:
 
 # ── Truncation cap ────────────────────────────────────────────────────────────
 
+class _TrackedCell:
+    """A minimal Range-like cell stand-in that counts .Value accesses.
+
+    A plain object (not MagicMock) so we can assert "never touched" without
+    resorting to a PropertyMock-on-type hack that would mutate MagicMock's
+    shared class.
+    """
+
+    def __init__(self, address, value):
+        self.Address = address
+        self._value = value
+        self.value_reads = 0
+
+    @property
+    def Value(self):
+        self.value_reads += 1
+        return self._value
+
+
+class TestWantValuesAndHitCap:
+    """Phase 1 item 2 + addendum item 12: skip .Value reads and cap stored
+    hits for scans that only need a count (count / replace pre-post scans),
+    while 'find' keeps returning values and 'find' still counts everything."""
+
+    def test_count_never_reads_cell_value(self):
+        from thepexcel_mcp.domains.find_replace import _find_all
+
+        cell1 = _TrackedCell("$A$1", "foo")
+        cell2 = _TrackedCell("$B$2", "foo")
+        wrap = _TrackedCell("$A$1", "foo")
+
+        rng = MagicMock()
+        rng.Find.return_value = cell1
+        rng.FindNext.side_effect = [cell2, wrap]
+
+        hits, total = _find_all(rng, "foo", -4123, 2, False, want_values=False, hit_cap=0)
+
+        assert total == 2
+        assert hits == []
+        assert cell1.value_reads == 0
+        assert cell2.value_reads == 0
+
+    def test_find_action_still_reads_values_by_default(self):
+        ms = make_mock_session()
+        rng = _make_rng_mock_single_match("$A$1", "hello")
+        result = _patch_and_call("find", ms, rng, find_text="hello")
+        assert result["applied"]["matches"][0]["value"] == "hello"
+
+    def test_hit_cap_limits_stored_hits_but_reports_true_total(self):
+        from thepexcel_mcp.domains.find_replace import _find_all
+
+        addresses = [f"$A${i}" for i in range(1, 6)]  # 5 matches
+        cells = [_make_cell_mock(a, "x") for a in addresses]
+        rng = MagicMock()
+        rng.Find.return_value = cells[0]
+        wrap_cell = _make_cell_mock(addresses[0], "x")
+        rng.FindNext.side_effect = cells[1:] + [wrap_cell]
+
+        hits, total = _find_all(rng, "x", -4123, 2, False, hit_cap=2)
+
+        assert total == 5
+        assert len(hits) == 2
+
+    def test_replace_wraps_mutation_in_bulk_guard(self):
+        """_replace must wrap rng.Replace() in bulk_guard(app) — not the
+        read-only pre/post count scans."""
+        ms = make_mock_session()
+        rng = MagicMock()
+        rng.Worksheet = MagicMock()
+        rng.Worksheet.Name = "Sheet1"
+        rng.Application = MagicMock()
+        rng.Replace.return_value = True
+        rng.Find.return_value = None  # no matches before or after
+
+        ws_mock = MagicMock()
+        ws_mock.Cells = rng
+        ws_mock.Name = "Sheet1"
+        ms.get_sheet.return_value = ws_mock
+
+        with patch("thepexcel_mcp.domains.find_replace._session", ms):
+            with patch("thepexcel_mcp.domains.find_replace.bulk_guard") as bg:
+                bg.return_value.__enter__ = MagicMock(return_value=None)
+                bg.return_value.__exit__ = MagicMock(return_value=False)
+                from thepexcel_mcp.domains.find_replace import find_replace_action
+                find_replace_action("replace", find_text="x", replace_text="y")
+
+        bg.assert_called_once_with(rng.Application)
+
+
 class TestTruncationCap:
     def test_find_caps_at_1000(self):
         """When total_found > 1000 the matches list must be capped at 1000."""

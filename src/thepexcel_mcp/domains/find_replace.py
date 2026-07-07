@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from fastmcp.exceptions import ToolError
 
-from ..session import ExcelSession, excel_guard
+from ..session import ExcelSession, bulk_guard, excel_guard
 
 _session = ExcelSession()
 
@@ -219,16 +219,32 @@ def _resolve_range(range_str: str, sheet: str | None, workbook: str | None):
 
 # ── Find loop helper ──────────────────────────────────────────────────────────
 
-def _find_all(rng, find_text: str, look_in_int: int, look_at_int: int, match_case: bool):
+def _find_all(
+    rng,
+    find_text: str,
+    look_in_int: int,
+    look_at_int: int,
+    match_case: bool,
+    want_values: bool = True,
+    hit_cap: int | None = None,
+) -> tuple[list[tuple[str, str]], int]:
     """Iterate all matching cells in rng using Find + FindNext loop.
 
-    Returns list of (address_str, value_str).
+    Returns (hits, total) — hits is a list of (address_str, value_str) capped
+    at ``hit_cap`` entries (None = uncollected/unbounded); total is the FULL
+    match count in this scope regardless of the cap. The FindNext traversal
+    itself can't be skipped (it's how we detect the wrap and know the true
+    count), but for count/replace call sites that only need the count we skip
+    both the per-hit ``.Value`` read (``want_values=False``) and the list
+    growth (``hit_cap=0``) — avoiding O(total) memory/COM-marshalling for
+    scans that only ever report a number.
 
     CRITICAL infinite-loop guard: save the first hit's .Address; stop when
     FindNext returns that same address again (wrap detection).
     Range.Find returns None when nothing found — do NOT crash on None.
     """
     hits: list[tuple[str, str]] = []
+    total = 0
     try:
         cell = rng.Find(
             What=find_text,
@@ -238,15 +254,20 @@ def _find_all(rng, find_text: str, look_in_int: int, look_at_int: int, match_cas
             MatchCase=match_case,
         )
         if cell is None:
-            return hits
+            return hits, 0
 
         first_address = cell.Address
         while True:
-            try:
-                val = str(cell.Value) if cell.Value is not None else ""
-            except Exception:
-                val = ""
-            hits.append((cell.Address, val))
+            if hit_cap is None or len(hits) < hit_cap:
+                if want_values:
+                    try:
+                        val = str(cell.Value) if cell.Value is not None else ""
+                    except Exception:
+                        val = ""
+                else:
+                    val = ""
+                hits.append((cell.Address, val))
+            total += 1
 
             cell = rng.FindNext(cell)
             if cell is None or cell.Address == first_address:
@@ -257,7 +278,7 @@ def _find_all(rng, find_text: str, look_in_int: int, look_at_int: int, match_cas
     except Exception as e:
         raise _session.wrap(e, "Find loop failed")
 
-    return hits
+    return hits, total
 
 
 # ── Action implementations ────────────────────────────────────────────────────
@@ -271,12 +292,18 @@ def _find(
 ) -> dict:
     """Locate all matching cells across all scopes."""
     all_hits: list[dict] = []
+    total = 0
     for rng, ws_name in scopes:
-        hits = _find_all(rng, find_text, look_in_int, look_at_int, match_case)
+        # Cap collection to the remaining find-cap budget across scopes —
+        # total_found still counts every match, only the stored list is capped.
+        remaining = max(0, _FIND_CAP - len(all_hits))
+        hits, count = _find_all(
+            rng, find_text, look_in_int, look_at_int, match_case, hit_cap=remaining
+        )
         for addr, val in hits:
             all_hits.append({"sheet": ws_name, "cell": addr, "value": val})
+        total += count
 
-    total = len(all_hits)
     truncated = total > _FIND_CAP
     return {
         "find_replace": "find",
@@ -284,7 +311,7 @@ def _find(
             "find_text": find_text,
             "total_found": total,
             "truncated": truncated,
-            "matches": all_hits[:_FIND_CAP],
+            "matches": all_hits,
         },
     }
 
@@ -299,8 +326,13 @@ def _count(
     """Return only the count of matching cells across all scopes."""
     total = 0
     for rng, _ws_name in scopes:
-        hits = _find_all(rng, find_text, look_in_int, look_at_int, match_case)
-        total += len(hits)
+        # count-only: skip the per-hit .Value read and skip growing a hits list —
+        # only the traversal (needed for wrap-detection) matters here.
+        _, count = _find_all(
+            rng, find_text, look_in_int, look_at_int, match_case,
+            want_values=False, hit_cap=0,
+        )
+        total += count
 
     return {
         "find_replace": "count",
@@ -329,24 +361,30 @@ def _replace(
        Report cells_matched_before + remaining_after.
 
     Range.Replace returns Boolean (not a count) — we use the find loop
-    both before and after to measure the actual effect.
+    both before and after to measure the actual effect. Both count phases
+    are values-free / list-free (want_values=False, hit_cap=0) — only the
+    mutation phase (rng.Replace) needs bulk_guard, not these read-only scans.
     """
     # Step 1: pre-count
     cells_matched_before = 0
     for rng, _ws_name in scopes:
-        hits = _find_all(rng, find_text, look_in_int, look_at_int, match_case)
-        cells_matched_before += len(hits)
+        _, count = _find_all(
+            rng, find_text, look_in_int, look_at_int, match_case,
+            want_values=False, hit_cap=0,
+        )
+        cells_matched_before += count
 
     # Step 2: replace
     try:
-        for rng, _ws_name in scopes:
-            rng.Replace(
-                What=find_text,
-                Replacement=replace_text,
-                LookAt=look_at_int,
-                SearchOrder=_XL_BY_ROWS,
-                MatchCase=match_case,
-            )
+        with bulk_guard(app):
+            for rng, _ws_name in scopes:
+                rng.Replace(
+                    What=find_text,
+                    Replacement=replace_text,
+                    LookAt=look_at_int,
+                    SearchOrder=_XL_BY_ROWS,
+                    MatchCase=match_case,
+                )
     except ToolError:
         raise
     except Exception as e:
@@ -355,8 +393,11 @@ def _replace(
     # Step 3: VERIFY-EFFECT — re-count; should be 0
     remaining_after = 0
     for rng, _ws_name in scopes:
-        hits = _find_all(rng, find_text, look_in_int, look_at_int, match_case)
-        remaining_after += len(hits)
+        _, count = _find_all(
+            rng, find_text, look_in_int, look_at_int, match_case,
+            want_values=False, hit_cap=0,
+        )
+        remaining_after += count
 
     return {
         "find_replace": "replace",

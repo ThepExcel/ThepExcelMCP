@@ -14,7 +14,7 @@ from contextlib import contextmanager
 
 from fastmcp.exceptions import ToolError
 
-from ..session import ExcelSession, excel_guard
+from ..session import ExcelSession, bulk_guard, excel_guard
 
 _session = ExcelSession()
 
@@ -300,20 +300,23 @@ def _border(
     try:
         sides_key = border_sides.lower()
         if sides_key == "all":
-            # All 4 edges + inside horizontals + verticals
-            for side_const in (
-                _XL_EDGE_LEFT, _XL_EDGE_TOP, _XL_EDGE_BOTTOM, _XL_EDGE_RIGHT,
-                _XL_INSIDE_VERTICAL, _XL_INSIDE_HORIZONTAL,
-            ):
-                _apply_border_side(rng, side_const, line_style, weight, color_bgr)
+            # All 4 edges + inside horizontals + verticals — a genuinely bulk
+            # loop of Border COM calls, worth suppressing screen/calc churn for.
+            with bulk_guard(rng.Application):
+                for side_const in (
+                    _XL_EDGE_LEFT, _XL_EDGE_TOP, _XL_EDGE_BOTTOM, _XL_EDGE_RIGHT,
+                    _XL_INSIDE_VERTICAL, _XL_INSIDE_HORIZONTAL,
+                ):
+                    _apply_border_side(rng, side_const, line_style, weight, color_bgr)
         elif sides_key == "outline":
             for side_const in (
                 _XL_EDGE_LEFT, _XL_EDGE_TOP, _XL_EDGE_BOTTOM, _XL_EDGE_RIGHT,
             ):
                 _apply_border_side(rng, side_const, line_style, weight, color_bgr)
         elif sides_key == "inside":
-            for side_const in (_XL_INSIDE_VERTICAL, _XL_INSIDE_HORIZONTAL):
-                _apply_border_side(rng, side_const, line_style, weight, color_bgr)
+            with bulk_guard(rng.Application):
+                for side_const in (_XL_INSIDE_VERTICAL, _XL_INSIDE_HORIZONTAL):
+                    _apply_border_side(rng, side_const, line_style, weight, color_bgr)
         elif sides_key == "top":
             _apply_border_side(rng, _XL_EDGE_TOP, line_style, weight, color_bgr)
         elif sides_key == "bottom":

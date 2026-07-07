@@ -227,6 +227,32 @@ class TestBorderAction:
         with pytest.raises(ToolError, match="border_style"):
             _call_format("border", rng, mock_session, border_style="dotted")
 
+    def test_all_sides_wrapped_in_bulk_guard(self):
+        mock_session = make_mock_session()
+        rng = _make_range_mock()
+        with patch("thepexcel_mcp.domains.format.bulk_guard") as bg:
+            bg.return_value.__enter__ = MagicMock(return_value=None)
+            bg.return_value.__exit__ = MagicMock(return_value=False)
+            _call_format("border", rng, mock_session, border_sides="all")
+        bg.assert_called_once_with(rng.Application)
+
+    def test_inside_sides_wrapped_in_bulk_guard(self):
+        mock_session = make_mock_session()
+        rng = _make_range_mock()
+        with patch("thepexcel_mcp.domains.format.bulk_guard") as bg:
+            bg.return_value.__enter__ = MagicMock(return_value=None)
+            bg.return_value.__exit__ = MagicMock(return_value=False)
+            _call_format("border", rng, mock_session, border_sides="inside")
+        bg.assert_called_once_with(rng.Application)
+
+    def test_single_side_not_wrapped_in_bulk_guard(self):
+        """A single-side border (e.g. 'top') is a single COM call — no bulk_guard needed."""
+        mock_session = make_mock_session()
+        rng = _make_range_mock()
+        with patch("thepexcel_mcp.domains.format.bulk_guard") as bg:
+            _call_format("border", rng, mock_session, border_sides="top")
+        bg.assert_not_called()
+
     def test_none_style_skips_weight(self):
         """When border_style='none', Weight should NOT be set (avoid COM error)."""
         mock_session = make_mock_session()

@@ -624,3 +624,64 @@ class TestCalcColumnGuard:
         assert "cube_formula" in msg
         assert "add_calculated_column" in msg
         assert "add_calculated_table" in msg
+
+
+# ── _cube_resolve_async early-exit ──────────────────────────────────────────────
+
+class TestCubeResolveAsync:
+    """Phase 1 item 5: fallback loop must early-exit once CalculationState
+    reports Idle, instead of always looping the full 40 iterations."""
+
+    def test_primary_path_used_when_available(self):
+        from thepexcel_mcp.domains.datamodel import _cube_resolve_async
+
+        app = MagicMock()
+        _cube_resolve_async(app)
+
+        app.CalculateUntilAsyncQueriesDone.assert_called_once()
+        app.Calculate.assert_not_called()
+
+    def test_fallback_exits_early_when_idle(self):
+        from thepexcel_mcp.domains.datamodel import _cube_resolve_async
+
+        app = MagicMock()
+        app.CalculateUntilAsyncQueriesDone.side_effect = Exception("not supported")
+        app.CalculationState = 0  # xlCalculationStateIdle from the very first poll
+
+        with patch("thepexcel_mcp.domains.datamodel.time.sleep") as mock_sleep:
+            _cube_resolve_async(app)
+
+        # Idle on the first check → break before ever calling Calculate() or sleeping
+        app.Calculate.assert_not_called()
+        mock_sleep.assert_not_called()
+
+    def test_fallback_loops_until_idle(self):
+        from thepexcel_mcp.domains.datamodel import _cube_resolve_async
+
+        app = MagicMock()
+        app.CalculateUntilAsyncQueriesDone.side_effect = Exception("not supported")
+        # Busy (1) for 3 checks, then Idle (0)
+        app.CalculationState = MagicMock()
+        states = [1, 1, 1, 0]
+        type(app).CalculationState = property(lambda self, s=iter(states): next(s))
+
+        with patch("thepexcel_mcp.domains.datamodel.time.sleep"):
+            _cube_resolve_async(app)
+
+        assert app.Calculate.call_count == 3
+
+    def test_fallback_still_bounded_when_calculationstate_unavailable(self):
+        """If CalculationState access raises (old Excel build), the loop must
+        still terminate after the existing 40-iteration bound, not hang."""
+        from thepexcel_mcp.domains.datamodel import _cube_resolve_async
+
+        app = MagicMock()
+        app.CalculateUntilAsyncQueriesDone.side_effect = Exception("not supported")
+        type(app).CalculationState = property(
+            lambda self: (_ for _ in ()).throw(Exception("not available"))
+        )
+
+        with patch("thepexcel_mcp.domains.datamodel.time.sleep"):
+            _cube_resolve_async(app)
+
+        assert app.Calculate.call_count == 40

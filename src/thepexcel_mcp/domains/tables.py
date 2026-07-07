@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastmcp.exceptions import ToolError
 
-from ..session import ExcelSession
+from ..session import ExcelSession, bulk_guard
 
 _session = ExcelSession()
 
@@ -193,8 +193,32 @@ def _require(value, param: str, action: str) -> None:
         raise ToolError(f"action='{action}' requires '{param}'.")
 
 
-def _find_table(wb, name: str):
-    """Return a ListObject COM object or raise ToolError with available names."""
+def _find_table(wb, name: str, sheet: str | None = None):
+    """Return a ListObject COM object or raise ToolError with available names.
+
+    Fast path: try the given sheet (if any) then the active sheet directly
+    via ListObjects(name) — avoids enumerating every sheet/table when the
+    table lives where we'd expect it. Falls back to the existing full
+    enumeration (which also builds the not-found error listing) on a miss.
+    """
+    candidates = []
+    if sheet:
+        try:
+            candidates.append(wb.Sheets(sheet))
+        except Exception:
+            pass
+    try:
+        active = wb.ActiveSheet
+        if active is not None:
+            candidates.append(active)
+    except Exception:
+        pass
+    for ws in candidates:
+        try:
+            return ws.ListObjects(name)
+        except Exception:
+            continue
+
     available = []
     for i in range(1, wb.Sheets.Count + 1):
         ws = wb.Sheets(i)
@@ -258,7 +282,16 @@ def _create(
     has_headers: bool,
 ) -> dict:
     wb = _session.get_workbook(workbook)
-    ws = _session.get_sheet(sheet, workbook)
+    # Resolve the sheet from the already-fetched wb instead of _session.get_sheet()
+    # (which would call get_workbook() a second time for the same workbook).
+    if sheet is None:
+        ws = wb.ActiveSheet
+    else:
+        try:
+            ws = wb.Sheets(sheet)
+        except Exception:
+            available = [wb.Sheets(i + 1).Name for i in range(wb.Sheets.Count)]
+            raise ToolError(f"Sheet '{sheet}' not found. Available: {available}")
     # Guard duplicate name across workbook
     for i in range(1, wb.Sheets.Count + 1):
         s = wb.Sheets(i)
@@ -315,18 +348,32 @@ def _read(
             "next_offset": None,
         }
 
-    raw = dbr.Value
-    if raw is None:
-        rows_data = []
-    elif not isinstance(raw, tuple):
-        rows_data = [[raw]]
-    elif raw and not isinstance(raw[0], tuple):
-        rows_data = [list(raw)]
-    else:
-        rows_data = [list(r) for r in raw]
+    total_rows = dbr.Rows.Count
+    total_cols = dbr.Columns.Count
 
-    total_rows = len(rows_data)
-    page = rows_data[offset: offset + limit]
+    if offset >= total_rows:
+        page: list = []
+    else:
+        r1, c1 = dbr.Row, dbr.Column
+        last_row = r1 + min(offset + limit, total_rows) - 1
+        ws = dbr.Parent
+        # Page-scoped read: only marshal the rows this page needs via a
+        # bounded Cells(...) block — was previously dbr.Value (the ENTIRE
+        # table body) sliced in Python per page, O(total_rows) per call.
+        page_rng = ws.Range(
+            ws.Cells(r1 + offset, c1),
+            ws.Cells(last_row, c1 + total_cols - 1),
+        )
+        raw = page_rng.Value
+        if raw is None:
+            page = []
+        elif not isinstance(raw, tuple):
+            page = [[raw]]
+        elif raw and not isinstance(raw[0], tuple):
+            page = [list(raw)]
+        else:
+            page = [list(r) for r in raw]
+
     filtered = [[row[i] for i in col_indices] for row in page]
     has_more = (offset + limit) < total_rows
     return {
@@ -341,12 +388,49 @@ def _read(
 def _append_rows(name: str, workbook: str | None, values: list) -> dict:
     wb = _session.get_workbook(workbook)
     lo = _find_table(wb, name)
+    # Cap the write block at the widest row actually supplied — NOT the full
+    # table width. ListRows.Add() already auto-fills any calculated-column
+    # formula into the new row, so writing None across columns nobody
+    # supplied would silently clear those formulas. Capping to the widest
+    # provided row means this still only ever touches the columns the old
+    # per-cell loop would have touched (respecting lo.ListColumns.Count as an
+    # upper bound), while doing ONE block write instead of R×C single-cell writes.
+    n_cols = min(
+        lo.ListColumns.Count,
+        max((len(r) if isinstance(r, (list, tuple)) else 1) for r in values),
+    )
     try:
-        for row_values in values:
-            new_row = lo.ListRows.Add()
-            for col_idx, val in enumerate(row_values, start=1):
-                if col_idx <= lo.ListColumns.Count:
-                    new_row.Range.Cells(1, col_idx).Value = val
+        with bulk_guard(wb.Application):
+            for _ in values:
+                lo.ListRows.Add()
+
+            if n_cols > 0:
+                dbr = lo.DataBodyRange
+                if dbr is None:
+                    raise ToolError(
+                        f"Table '{name}' has no DataBodyRange after ListRows.Add() "
+                        "— unexpected state."
+                    )
+                ws = dbr.Parent
+                last_row = dbr.Row + dbr.Rows.Count - 1
+                first_new_row = last_row - len(values) + 1
+                first_col = dbr.Column
+
+                padded = tuple(
+                    tuple(
+                        row_values[c]
+                        if isinstance(row_values, (list, tuple)) and c < len(row_values)
+                        else None
+                        for c in range(n_cols)
+                    )
+                    for row_values in values
+                )
+                block = ws.Range(
+                    ws.Cells(first_new_row, first_col),
+                    ws.Cells(last_row, first_col + n_cols - 1),
+                )
+                block.Value = padded
+
         dbr = lo.DataBodyRange
         new_row_count = dbr.Rows.Count if dbr is not None else 0
         return {
@@ -354,6 +438,8 @@ def _append_rows(name: str, workbook: str | None, values: list) -> dict:
             "appended_rows": len(values),
             "total_rows": new_row_count,
         }
+    except ToolError:
+        raise
     except Exception as e:
         raise _session.wrap(e, f"Append rows to '{name}' failed")
 

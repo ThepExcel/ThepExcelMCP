@@ -34,6 +34,16 @@ wait_calculation
 ----------------
 Polls app.CalculationState with pythoncom.PumpWaitingMessages() to avoid
 deadlocking the STA message queue. Never a bare sleep loop.
+
+THEPEXCEL_MCP_EARLYBIND (EXPERIMENTAL, default OFF)
+----------------------------------------------------
+When truthy, get_app() additionally tries to swap the late-bound Application
+handle for an early-bound (win32com.client.gencache) wrapper of the SAME
+running instance. This is opt-in and experimental: win32com.client.Dispatch/
+EnsureDispatch do not attach to a running instance the way GetActiveObject
+does, so a mismatched Hwnd is discarded (kept late-bound) but the COM process
+EnsureDispatch may have spun up in that case is not explicitly closed here.
+Default is OFF; any failure silently falls back to the late-bound object.
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ from __future__ import annotations
 import contextlib
 import os
 import queue
+import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -53,9 +64,22 @@ from fastmcp.exceptions import ToolError
 # Default per-call timeout in seconds; override via env var.
 _DEFAULT_TIMEOUT = int(os.environ.get("THEPEXCEL_MCP_COM_TIMEOUT", "120"))
 
+# Slow-call diagnostic threshold in seconds; override via env var. Logged to
+# stderr only (stdout is the stdio transport — never write diagnostics there).
+_SLOW_LOG_THRESHOLD = float(os.environ.get("THEPEXCEL_MCP_SLOW_LOG_S", "5.0"))
+
 # xlCalculationStateIdle = 0 (Excel.XlCalculationState enum)
 _XL_CALCULATION_IDLE = 0
 _CALC_POLL_INTERVAL = 0.05  # seconds between CalculationState polls
+
+# XlCalculation.xlCalculationManual — used by bulk_guard(). Never hardcode the
+# "automatic" counterpart on restore; bulk_guard restores whatever the caller's
+# Calculation mode actually was before the guard ran.
+_XL_CALCULATION_MANUAL = -4135
+
+# Cached Application handle. Accessed only from the single STA worker thread
+# (see _COMWorker._run), so no lock is needed despite being module-level.
+_cached_app: win32com.client.CDispatch | None = None
 
 
 class _COMWorker:
@@ -88,11 +112,20 @@ class _COMWorker:
                 if item is None:
                     break  # shutdown signal
                 future, fn, args, kwargs = item
+                start = time.perf_counter()
                 try:
                     result = fn(*args, **kwargs)
                     future.set_result(result)
                 except Exception as exc:
                     future.set_exception(exc)
+                finally:
+                    duration = time.perf_counter() - start
+                    if duration > _SLOW_LOG_THRESHOLD:
+                        name = getattr(fn, "__qualname__", repr(fn))
+                        print(
+                            f"[thepexcel-mcp] slow COM call: {name} took {duration:.1f}s",
+                            file=sys.stderr,
+                        )
         finally:
             pythoncom.CoUninitialize()
 
@@ -133,6 +166,41 @@ def excel_guard(app):
         app.DisplayAlerts = True
 
 
+@contextlib.contextmanager
+def bulk_guard(app):
+    """Context manager: suppress screen/event churn for a batch of COM writes.
+
+    Saves ScreenUpdating / EnableEvents / Calculation, sets them to
+    False / False / xlCalculationManual, then restores the SAVED values on
+    exit (never hardcodes xlCalculationAutomatic — respects whatever mode the
+    caller/user actually had). If we put Calculation into Manual (i.e. it
+    wasn't already Manual), forces one Calculate() before restoring the mode
+    so writes made during the guard aren't left uncalculated.
+
+    Use only around genuinely bulk write loops (table append_rows, an
+    all/inside border loop, find/replace, the load_to_table sheet-rebuild
+    step) — never around PQ refresh / datamodel / cube calls, which have
+    their own documented deadlock and async-calculation semantics.
+    """
+    prev_screen_updating = app.ScreenUpdating
+    prev_enable_events = app.EnableEvents
+    prev_calculation = app.Calculation
+    app.ScreenUpdating = False
+    app.EnableEvents = False
+    app.Calculation = _XL_CALCULATION_MANUAL
+    try:
+        yield
+    finally:
+        if prev_calculation != _XL_CALCULATION_MANUAL:
+            try:
+                app.Calculate()
+            except Exception:
+                pass
+        app.Calculation = prev_calculation
+        app.EnableEvents = prev_enable_events
+        app.ScreenUpdating = prev_screen_updating
+
+
 def wait_calculation(app, timeout: float = 60.0) -> None:
     """Block until Excel finishes calculating (CalculationState == Idle).
 
@@ -148,6 +216,30 @@ def wait_calculation(app, timeout: float = 60.0) -> None:
                 f"{timeout:.0f}s. Retry when calculation completes."
             )
         time.sleep(_CALC_POLL_INTERVAL)
+
+
+def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
+    """EXPERIMENTAL (opt-in via THEPEXCEL_MCP_EARLYBIND, default OFF).
+
+    Try to swap a late-bound Application handle for an early-bound
+    (win32com.client.gencache) wrapper of the SAME running instance.
+
+    win32com.client.Dispatch/EnsureDispatch do not attach to a running
+    instance the way GetActiveObject does — they can spin up a brand new
+    Excel process instead. So the gencache wrapper is adopted ONLY when its
+    .Hwnd matches the already-attached late-bound app; otherwise (including
+    any exception) this silently falls back to the original late-bound app.
+    """
+    flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return app
+    try:
+        early = win32com.client.gencache.EnsureDispatch("Excel.Application")
+        if early.Hwnd == app.Hwnd:
+            return early
+    except Exception:
+        pass
+    return app
 
 
 def _enum_rot_workbooks(name: str):
@@ -237,9 +329,23 @@ class ExcelSession:
         running fine* — which otherwise looks like "Excel is not running". On
         that error we clear the cache and retry once.
 
+        Caches the resolved Application handle across calls (module-level,
+        worker-thread-only — safe without a lock since only the single STA
+        worker thread ever calls this). Each call does a cheap liveness probe
+        (``app.Name``) against the cache first; any exception drops the stale
+        cache and falls through to the normal attach/self-heal/auto-launch path.
+
         Must be called from within the COM worker thread (i.e. inside a
         callable passed to run_com).
         """
+        global _cached_app
+
+        if _cached_app is not None:
+            try:
+                _ = _cached_app.Name  # cheap liveness probe
+                return _cached_app
+            except Exception:
+                _cached_app = None  # stale handle (Excel closed/crashed) — re-resolve
 
         def _clear_gen_py_cache() -> None:
             try:
@@ -265,34 +371,41 @@ class ExcelSession:
                 pass
             return app
 
+        app: win32com.client.CDispatch | None = None
+
         # 1) Attach to a running instance. A corrupt gen_py cache can make this
         #    throw AttributeError even when Excel IS running → clear + retry so
         #    we reattach to the user's Excel instead of spawning a duplicate.
         try:
-            return _attach()
+            app = _attach()
         except AttributeError:
             _clear_gen_py_cache()
             try:
-                return _attach()
+                app = _attach()
             except Exception:
-                pass  # genuinely not running → fall through to auto-launch
+                app = None  # genuinely not running → fall through to auto-launch
         except Exception:
-            pass  # not running / ROT miss → fall through to auto-launch
+            app = None  # not running / ROT miss → fall through to auto-launch
 
-        # 2) Auto-launch (default on).
-        autolaunch = os.environ.get("THEPEXCEL_MCP_AUTOLAUNCH", "1").strip().lower()
-        if autolaunch in ("0", "false", "no", "off"):
-            raise ToolError(
-                "Excel is not running and auto-launch is disabled "
-                "(THEPEXCEL_MCP_AUTOLAUNCH is falsy). Open Excel yourself, or "
-                "re-enable auto-launch (unset the var or set it to 1) so the "
-                "tool can open Excel for you."
-            )
-        try:
-            return _launch()
-        except AttributeError:
-            _clear_gen_py_cache()
-            return _launch()
+        if app is None:
+            # 2) Auto-launch (default on).
+            autolaunch = os.environ.get("THEPEXCEL_MCP_AUTOLAUNCH", "1").strip().lower()
+            if autolaunch in ("0", "false", "no", "off"):
+                raise ToolError(
+                    "Excel is not running and auto-launch is disabled "
+                    "(THEPEXCEL_MCP_AUTOLAUNCH is falsy). Open Excel yourself, or "
+                    "re-enable auto-launch (unset the var or set it to 1) so the "
+                    "tool can open Excel for you."
+                )
+            try:
+                app = _launch()
+            except AttributeError:
+                _clear_gen_py_cache()
+                app = _launch()
+
+        app = _maybe_earlybind(app)
+        _cached_app = app
+        return app
 
     def get_workbook(self, workbook: str | None = None) -> win32com.client.CDispatch:
         """Return a Workbook COM object.
