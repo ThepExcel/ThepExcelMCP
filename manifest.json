@@ -48,7 +48,7 @@
     "autolaunch": {
       "type": "boolean",
       "description": "Auto-launch Excel if no instance is running",
-      "default": false
+      "default": true
     },
     "enable_vba": {
       "type": "boolean",

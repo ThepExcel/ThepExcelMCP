@@ -1,13 +1,54 @@
+<div align="center">
+
+<img src="assets/banner-thepexcelmcp-1200x630.png" alt="ThepExcelMCP — AI agents driving live Excel Desktop via COM" width="720">
+
 # ThepExcelMCP
 
-A Windows MCP server that drives a **live running Excel Desktop instance** via COM (pywin32), giving AI agents full Excel capability that file-only libraries cannot provide. When an agent calls a tool here, it is talking to the actual Excel process — Power Query queries refresh against live data sources, PivotTables rebuild with real aggregations, charts render to PNG for visual verification, DAX measures execute in the in-memory Data Model, and dynamic-array spill ranges resolve correctly. This is the difference between editing an XML zip file and actually using Excel.
+**Give your AI agent hands on the real Excel — not just the file.**
+
+A Windows MCP server that drives a **live, running Excel Desktop** through COM automation.
+Power Query that actually refreshes, PivotTables that actually pivot, DAX that actually calculates,
+and screenshots so the AI can *see* what it built.
+
+[![CI](https://github.com/ThepExcel/ThepExcelMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/ThepExcel/ThepExcelMCP/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)](#platform-support)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Tests](https://img.shields.io/badge/unit_tests-927-brightgreen)](tests/)
+
+[Quick start](#quick-start--hand-it-to-your-ai-agent) ·
+[Why live COM?](#why-a-live-excel-not-a-file-library) ·
+[Tools](#the-26-tools) ·
+[Install](#install) ·
+[Safety](#safety-model) ·
+[Troubleshooting](#troubleshooting)
+
+</div>
+
+---
+
+## What is this?
+
+ThepExcelMCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that exposes
+**26 tools** covering nearly everything a power user can do in Excel — workbooks, ranges, Tables,
+Power Query (full M-code CRUD), PivotTables, the Data Model with DAX measures, charts, formatting,
+conditional formats, validation, slicers, page setup / PDF export, protection, VBA (opt-in), and a
+safety layer with non-destructive snapshots and range/sheet diffing.
+
+It is for anyone who works in **Excel on Windows** and wants an AI agent
+(Claude Code, Claude Desktop, Codex CLI, or any MCP client) to do real spreadsheet work:
+analysts automating monthly reporting, Excel pros building Power Query pipelines by prompt,
+and developers who need an agent to build *and verify* real workbooks.
+
+When an agent calls a tool here, it is talking to the actual Excel process — **including the
+workbook you already have open**. This is the difference between editing an XML zip file and
+actually using Excel.
 
 ## Quick start — hand it to your AI agent
 
-Just send this GitHub link to your AI coding agent (Claude Code, Codex CLI, etc.)
-and tell it to take over — it will read this README and set up the MCP server for
-you, as either **user scope** (available in every project) or **project scope**
-(one project only). ❤️
+Send this GitHub link to your AI coding agent (Claude Code, Codex CLI, …) and tell it to take
+over — it will read this README and set the MCP server up for you, as either **user scope**
+(every project) or **project scope** (one project only). ❤️
 
 > 🇹🇭 แค่ส่งลิงก์ GitHub นี้ให้ AI Agent ของคุณ แล้วบอกให้ AI จัดการต่อได้เลย จะลง MCP เป็น User Scope หรือ Project Scope ก็ได้ ❤️
 
@@ -15,275 +56,281 @@ you, as either **user scope** (available in every project) or **project scope**
 https://github.com/ThepExcel/ThepExcelMCP
 ```
 
+Once registered, just talk to your agent. Things you can say:
+
+- *"Read the table on Sheet1 of Book1 and build a PivotTable of sales by Region, with a chart."*
+- *"Write a Power Query that loads `products.csv` and `orders.xlsx`, merges them on ProductID, and loads the result into a Table."*
+- *"Add a DAX measure `Total Revenue = SUM(Orders[Amount])` to the Data Model and format it as currency."*
+- *"Format the report header on the Summary sheet — bold, fill `#4472C4`, white text, freeze the top row — then screenshot it so you can check it looks right."*
+- *"Take a snapshot of this workbook first, then replace every occurrence of 'Widget' with 'Gadget' across the whole workbook and show me a diff."*
+
+## Why a live Excel, not a file library?
+
+File-based libraries (`openpyxl`, xlsx skills, raw XML editing) read and write the `.xlsx` on
+disk — but they cannot *operate Excel*. Driving the real application means the agent can author
+a complete solution from a blank workbook, on live data, with Excel doing the computing:
+
+| Capability | File libraries (openpyxl etc.) | ThepExcelMCP (live COM) |
+|---|---|---|
+| Read/write cells & formulas | ✅ | ✅ |
+| **Evaluate formulas / dynamic arrays** (`XLOOKUP`, `FILTER`, spill) | ❌ stale cached values | ✅ live calc engine, spill read-back |
+| **Power Query** — create/edit M code, refresh against sources | ❌ | ✅ full CRUD + refresh + parameters |
+| **PivotTables** with real aggregation | ❌ (often destroyed on save) | ✅ create, field ops, layout, read |
+| **Data Model / Power Pivot** — relationships, DAX measures | ❌ | ✅ + CUBEVALUE/CUBEMEMBER helpers |
+| **Charts** incl. true PivotCharts | ⚠️ limited, fragile | ✅ create/configure + PNG export |
+| **Visual verification** — screenshot what was built | ❌ | ✅ range / sheet / chart → PNG |
+| Work on the **workbook you already have open** | ❌ file must be closed | ✅ attaches to the running instance |
+| VBA macros, PDF export, slicers, threaded comments | ❌ | ✅ |
+
+Every call runs through a single STA COM worker thread, so Excel's own rules for calculation,
+formatting, and events apply exactly as they would for a human at the keyboard. And because the
+agent can **screenshot** any range, sheet, or chart, it can close the loop: build → look → fix.
+
 ## How it runs — local, not a hosted service
 
-ThepExcelMCP is a **stdio MCP server that runs as a process on your own Windows
-machine** and controls the Excel running there. There is nothing to sign up for, no
-account, and no data leaves your computer. Use it from any MCP client that can
-launch a local stdio server on that same machine:
+ThepExcelMCP is a **stdio MCP server that runs as a process on your own Windows machine** and
+controls the Excel running there. Nothing to sign up for, no account, and no spreadsheet data
+leaves your computer.
 
 - ✅ **Claude Code**, **Claude Desktop**, and **Codex CLI** run locally and can launch it.
-- ❌ Cloud-only agent surfaces that can't run a local process on your machine — e.g.
-  **Claude Cowork** today — can't reach your local Excel, so they can't use it.
+- ❌ Cloud-only agent surfaces that can't run a local process on your machine can't reach your
+  local Excel, so they can't use it.
 
-## Why COM, not a file library?
+## The 26 tools
 
-Libraries such as `openpyxl` read and write the `.xlsx` file on disk, but they
-cannot *operate Excel*. ThepExcelMCP drives the real application, so an AI can
-**author a complete solution from a blank workbook** — not just tweak a file that
-already exists:
+Grouped by capability — every tool is action-dispatched (`action="..."`), with precise,
+example-rich docstrings that serve as the LLM-facing API.
 
-- **Build a whole data pipeline end to end, in one tool.** Hand the AI a blank
-  workbook and it can *write* a Power Query in M from scratch, merge and reshape
-  several sources, load the result into a worksheet Table, then build a PivotTable
-  and a chart on top — the entire flow, start to finish. Refreshing an existing
-  query is the trivial part; this *creates* the query, the table, and the pivot.
-- **Power Query, fully editable.** Read and rewrite the M of any existing query,
-  create and set query parameters, refresh against live data sources, and load to a
-  worksheet Table or straight into the Data Model. (A file library cannot evaluate
-  M code at all.)
-- **Data Model & DAX (Power Pivot) that actually calculate.** Add model tables and
-  relationships, write and update DAX measures, and have Excel's in-memory engine
-  compute them — plus CUBEVALUE / CUBEMEMBER helpers.
-- **PivotTables that really pivot.** From a range, a table, or the Data Model; add,
-  move, and remove fields with real aggregations; set layout and refresh — every
-  value computed by Excel, not approximated.
-- **Live recalculation.** Dynamic-array spill formulas (`XLOOKUP`, `SORT`,
-  `FILTER`), volatile functions, and ordinary formulas are evaluated by Excel's
-  calculation engine, and the spilled results can be read back.
-- **Python in Excel.** Insert `=PY()` formulas that run in Excel's Python runtime.
-- **Charts, formatting, and the visual layer** — and capture any range, sheet, or
-  chart as a PNG so the AI can *see* what it just built and verify it.
-- **VBA and the full object model.** Run macros and reach anything COM exposes.
-- **A safety net.** Take a non-destructive snapshot before risky automation, and
-  diff two ranges or sheets to see exactly what changed.
+| Area | Tools | What the agent can do |
+|---|---|---|
+| **Workbooks, sheets & data I/O** | `excel_workbook` · `excel_sheet` · `excel_range` · `excel_table` | Open/create/save workbooks, manage sheets, read/write ranges (paginated, spill-aware, `Formula2` dynamic arrays, experimental `=PY()`), full Excel Table (ListObject) lifecycle: sort, filter, styles, totals, structured references |
+| **Power Query & Data Model** | `excel_powerquery` · `excel_datamodel` · `excel_name` | Create/edit/refresh M queries with a built-in M static analyzer, query parameters, load to Table or Data Model; model tables, relationships, DAX measures; CUBE formula helpers; named ranges & LAMBDA functions |
+| **PivotTables** | `excel_pivot` · `excel_slicer` | Create pivots from a range, Table, or the Data Model; add/move/remove fields with real aggregations; layouts & subtotals; slicers and date timelines |
+| **Charts & visual verification** | `excel_chart` · `excel_screenshot` · `excel_shape` · `excel_sparkline` | Create/configure charts (incl. true PivotCharts), export chart PNGs; capture any range/sheet/chart as PNG so the agent can *see* its work; images, text boxes, AutoShapes; in-cell sparklines |
+| **Formatting, layout & print** | `excel_format` · `excel_conditional_format` · `excel_validation` · `excel_view` · `excel_outline` · `excel_page_setup` · `excel_comment` · `excel_hyperlink` | Fonts/fills/borders/number formats/alignment, data bars & color scales & icon sets, dropdown validation, freeze panes/zoom/gridlines, row-column grouping, print setup + **PDF export**, notes & threaded comments, hyperlinks |
+| **Safety, audit & power tools** | `excel_snapshot` · `excel_diff` · `excel_find_replace` · `excel_protection` · `excel_vba` | Non-destructive snapshots (SaveCopyAs) with safe restore, cell-by-cell diff of ranges or whole sheets, find/count/replace at range/sheet/workbook scope, sheet & workbook protection, VBA module CRUD + macro run (double opt-in) |
 
-In short: a file library edits a spreadsheet *file*; ThepExcelMCP *uses Excel*.
-Every call runs through a single STA COM worker thread, so Excel's own rules for
-calculation, formatting, and event handling apply exactly as they would for a
-human sitting at the keyboard.
+<details>
+<summary><strong>Full action list per tool (click to expand)</strong></summary>
+
+| Tool | Actions |
+|---|---|
+| `excel_workbook` | `list`, `info`, `open`, `save`, `close`, `create`, `save_as` |
+| `excel_sheet` | `list`, `add`, `rename`, `delete` |
+| `excel_range` | `read` (paginated, spill metadata), `read_spill`, `write`, `write_formula` (Formula2 / dynamic arrays), `write_py` (`=PY()`, experimental), `clear` |
+| `excel_table` | `list`, `create`, `read` (paginated), `append_rows`, `add_column` (with formula), `sort`, `filter`, `set_style`, `toggle_totals`, `rename`, `delete` |
+| `excel_powerquery` | `list`, `get`, `create`, `update`, `delete`, `refresh`, `refresh_all`, `load_to_table`, `load_to_datamodel`, `analyze`, `analyze_raw`, `create_parameter`, `get_parameter`, `set_parameter`, `list_parameters` |
+| `excel_pivot` | `list`, `create` (range/table/datamodel source), `add_field` (aggregation + number format), `remove_field`, `move_field`, `set_layout`, `refresh`, `delete`, `read` (paginated) |
+| `excel_datamodel` | `info`, `list_tables`, `add_table`, `list_relationships`, `add_relationship`, `delete_relationship`, `list_measures`, `add_measure` (DAX), `update_measure`, `delete_measure`, `refresh`, `cube_value`, `cube_member`, `cube_formula` |
+| `excel_name` | `list`, `get`, `set`, `delete` (named ranges, constants, LAMBDA — with `is_lambda` flag) |
+| `excel_chart` | `list`, `create`, `configure`, `set_source`, `export_image` (PNG), `delete` |
+| `excel_screenshot` | `range`, `sheet`, `chart` |
+| `excel_shape` | `add_image`, `add_textbox`, `add_shape`, `list`, `move`, `delete` |
+| `excel_slicer` | `add`, `add_timeline`, `list`, `delete`, `connect` |
+| `excel_sparkline` | `add` (line/column/win-loss), `clear`, `list` |
+| `excel_format` | `font`, `fill`, `border`, `number_format`, `alignment` (incl. merge), `column_width`, `row_height`, `autofit` |
+| `excel_conditional_format` | `data_bar`, `color_scale`, `icon_set`, `cell_rule`, `top_bottom`, `clear` |
+| `excel_validation` | `list` (dropdown), `whole_number`, `decimal`, `date`, `text_length`, `custom`, `clear` |
+| `excel_view` | `freeze_panes`, `unfreeze_panes`, `gridlines`, `zoom`, `headings` |
+| `excel_outline` | `group_rows`, `group_columns`, `ungroup_rows`, `ungroup_columns`, `show_levels`, `clear` |
+| `excel_page_setup` | `set` (orientation/paper/margins/fit-to-page), `print_area`, `print_titles`, `header_footer`, `export_pdf` (sheet or workbook), `get` |
+| `excel_comment` | `add`, `edit`, `reply`, `delete`, `list`, `get` (legacy notes + threaded comments) |
+| `excel_hyperlink` | `add` (url/internal/email/file), `list`, `delete` |
+| `excel_protection` | `protect_sheet`, `unprotect_sheet`, `protect_workbook`, `unprotect_workbook`, `set_locked`, `status` |
+| `excel_find_replace` | `find`, `count`, `replace` (range/sheet/workbook scope; match-case, whole-cell) |
+| `excel_diff` | `ranges`, `sheets` (values, formulas, or both — pure read) |
+| `excel_snapshot` | `snapshot` (SaveCopyAs), `list`, `restore` (opens copy as a NEW workbook), `delete` |
+| `excel_vba` | `list_modules`, `get_module`, `write_module`, `delete_module`, `run` (opt-in, see [Safety](#safety-model)) |
+
+Structured references work naturally: `excel_range(action="read", range="Orders[Amount]")`.
+
+</details>
 
 ## Requirements
 
-- Windows 10 or 11
-- Microsoft 365 Excel Desktop (auto-launched with a blank workbook if not already running; opt out with `THEPEXCEL_MCP_AUTOLAUNCH=0`)
-- [uv](https://docs.astral.sh/uv/) — a fast Python package manager. It installs and
-  manages the right Python version for you, so you do **not** need to install Python
-  separately. If you don't have it yet:
+- **Windows 10 / 11**
+- **Microsoft 365 Excel Desktop** — auto-launched with a blank workbook if not already running
+  (opt out with `THEPEXCEL_MCP_AUTOLAUNCH=0`)
+- **[uv](https://docs.astral.sh/uv/)** — installs and manages the right Python for you, so you do
+  **not** need to install Python separately:
 
   ```powershell
   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
   ```
 
-  Or via winget: `winget install --id=astral-sh.uv -e`. Close and reopen your
-  terminal afterward so `uv` is on your PATH.
-
-## Platform support
-
-This server drives a **real Excel process through Windows COM** (`pywin32`), so it is **Windows only by design**:
-
-- ✅ **Windows 10 / 11** — fully supported.
-- ❌ **macOS** — not supported. Excel for Mac does not expose the COM automation API, and `pywin32` does not exist on macOS. There is no workaround; this is a hard platform limitation, not a missing feature.
-- ⚠️ **WSL (Windows Subsystem for Linux)** — the server itself **cannot run inside WSL**, because the Linux Python in WSL has no `pywin32` and no path to Windows COM. But if your MCP client (e.g. Claude Code) runs *inside* WSL, you can still use the server by running it as a **native Windows process** across the WSL ↔ Windows interop boundary:
-  1. Clone and `uv sync` the repo on the **Windows** filesystem (e.g. `C:\Tools\ThepExcelMCP`), using Windows `uv` — not inside the WSL filesystem.
-  2. From your WSL client, register the server so the *command* is the Windows `uv.exe` pointing at that Windows checkout:
-     ```bash
-     claude mcp add thepexcel-excel --scope user -- \
-       uv.exe run --directory 'C:\Tools\ThepExcelMCP' thepexcel-mcp
-     ```
-     The stdio pipes bridge the WSL→Windows process boundary; the server process and Excel both run natively on Windows. Excel must be open in your **Windows** desktop session (WSLg/Linux GUI Excel will not work).
-
-  This WSL path runs the same code on Windows under the hood — it is offered as guidance, not a separately tested install mode. The supported, no-surprises setup is plain Windows.
+  Or via winget: `winget install --id=astral-sh.uv -e`. Close and reopen your terminal afterward.
 
 ## Install
 
-```bash
+```powershell
 git clone https://github.com/ThepExcel/ThepExcelMCP.git
 cd ThepExcelMCP
 uv sync
 ```
 
-`uv sync` installs `fastmcp`, `pywin32`, and `pillow` into an isolated virtual environment. No pip or manual virtualenv setup required.
+`uv sync` installs `fastmcp`, `pywin32`, and `pillow` into an isolated virtual environment.
+No pip or manual virtualenv setup required.
 
-## Register with Claude Code (CLI)
-
-```bash
-claude mcp add thepexcel-excel --scope user -- uv run --directory /path/to/ThepExcelMCP thepexcel-mcp
-```
-
-On Windows the path will look like:
+### Register with Claude Code (CLI)
 
 ```powershell
 claude mcp add thepexcel-excel --scope user -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
 ```
 
-Verify the server appears and starts cleanly:
+Substitute `C:\path\to\ThepExcelMCP` with your own clone path. Verify with `claude mcp list`.
 
-```bash
-claude mcp list
-```
-
-To enable VBA and auto-launch Excel at startup, pass environment variables:
+To enable VBA as well:
 
 ```powershell
 claude mcp add thepexcel-excel --scope user `
-  -e THEPEXCEL_MCP_AUTOLAUNCH=1 `
   -e THEPEXCEL_MCP_ENABLE_VBA=1 `
   -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
 ```
 
-## Register with Claude Desktop
+### Register with Claude Desktop
 
-Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+**Option A — MCPB bundle (one file, drag-and-drop):**
+
+```powershell
+uv run python scripts/build_mcpb.py
+```
+
+This produces `dist/thepexcel-mcp.mcpb` — open it with Claude Desktop (Settings → Extensions) to
+install the server as a desktop extension.
+
+**Option B — manual config.** Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "thepexcel-excel": {
       "command": "uv",
-      "args": ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"],
-      "env": {
-        "THEPEXCEL_MCP_AUTOLAUNCH": "1"
-      }
+      "args": ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"]
     }
   }
 }
 ```
 
-Restart Claude Desktop after saving. The server starts on demand when you first call an Excel tool.
+Restart Claude Desktop after saving.
 
-## Register with Codex CLI
+<details>
+<summary><strong>Register with Codex CLI</strong></summary>
 
-Codex talks to MCP servers over the same stdio transport, so the server runs
-unchanged. `codex mcp add` writes to your **user-scoped** config
-(`~/.codex/config.toml`), making the server available in every Codex project:
-
-```powershell
-codex mcp add thepexcel-excel --env THEPEXCEL_MCP_AUTOLAUNCH=1 -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
-```
-
-Verify it registered:
+Codex talks MCP over the same stdio transport. `codex mcp add` writes to your **user-scoped**
+config (`~/.codex/config.toml`):
 
 ```powershell
-codex mcp list
-codex mcp get thepexcel-excel
+codex mcp add thepexcel-excel -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
 ```
 
-Equivalent manual edit of `~/.codex/config.toml`:
+Verify: `codex mcp list` / `codex mcp get thepexcel-excel`. Equivalent manual edit:
 
 ```toml
 [mcp_servers.thepexcel-excel]
 command = "uv"
 args = ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"]
-
-[mcp_servers.thepexcel-excel.env]
-THEPEXCEL_MCP_AUTOLAUNCH = "1"
 ```
 
-Drop the `[mcp_servers.thepexcel-excel.env]` table if you would rather start Excel yourself before the first call.
+**Project-scoped:** add the same block to `.codex/config.toml` in the project root (there is no
+CLI flag for project scope). Codex must trust the project, and project-scoped servers currently
+load on the CLI only — Codex Desktop reads just the user config
+([openai/codex#13025](https://github.com/openai/codex/issues/13025)). Restart the Codex session
+after editing — MCP tools load at session start.
 
-### Project-scoped (one project only)
+</details>
 
-To scope the server to a single project instead of globally, add the same
-`[mcp_servers.thepexcel-excel]` block to a `.codex/config.toml` file in that
-project's root. Two caveats:
+<details>
+<summary><strong>Using from WSL</strong></summary>
 
-- `codex mcp add` always writes to the **user** config — there is no CLI flag
-  for project scope, so create/edit `.codex/config.toml` by hand.
-- Codex must **trust the project**, and you must launch Codex from that project
-  root. Project-scoped servers load on the **CLI**; Codex **Desktop** currently
-  ignores project `.codex/config.toml` and reads only the user config
-  ([openai/codex#13025](https://github.com/openai/codex/issues/13025)).
+The server itself **cannot run inside WSL** (no `pywin32`, no COM). But if your MCP client runs
+inside WSL, register the server so the *command* is the Windows `uv.exe` pointing at a **Windows**
+checkout:
 
-Restart the Codex session after editing config — MCP tools load at session start.
+```bash
+claude mcp add thepexcel-excel --scope user -- \
+  uv.exe run --directory 'C:\Tools\ThepExcelMCP' thepexcel-mcp
+```
 
-## Tools
+The stdio pipes bridge the WSL→Windows boundary; the server and Excel both run natively on
+Windows. Excel must be open in your Windows desktop session. This path runs the same code on
+Windows under the hood — offered as guidance, not a separately tested install mode.
 
-There are **26 tools** in total, organized by category.
+</details>
 
-### Core
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_workbook` | list, info, open, save, close, create, save_as | Manage open workbooks: discover, open, create, save, save-as, and close. |
-| `excel_sheet` | list, add, rename, delete | Manage worksheets within a workbook: list, add, rename, delete. |
-| `excel_range` | read, read_spill, write, write_formula, write_py, clear | Read and write cell ranges, including dynamic-array spill and Python-in-Excel formulas. |
-
-### Data / Power Query / Data Model
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_powerquery` | list, get, create, update, delete, refresh, refresh_all, load_to_table, load_to_datamodel, analyze, analyze_raw, create_parameter, get_parameter, set_parameter, list_parameters | Manage Power Query (M code) queries: CRUD, refresh, load to table/model, analyze, and parameter ops. |
-| `excel_table` | list, create, read, append_rows, add_column, sort, filter, set_style, toggle_totals, rename, delete | Manage Excel Tables (ListObjects): create, read, append, add columns, sort, filter, style, totals, rename, delete. |
-| `excel_pivot` | list, create, add_field, remove_field, move_field, set_layout, refresh, delete, read | Manage PivotTables: create, add/remove/move fields, set layout, refresh, read, and delete. |
-| `excel_datamodel` | info, list_tables, add_table, list_relationships, add_relationship, delete_relationship, list_measures, add_measure, update_measure, delete_measure, refresh, cube_formula, cube_value, cube_member, add_calculated_column, add_calculated_table | Manage the Excel Data Model (Power Pivot): tables, relationships, DAX measures, and CUBE formula helpers. |
-| `excel_name` | list, get, set, delete | Manage defined names: named ranges, constants, and LAMBDA formulas. |
-
-### Objects
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_chart` | list, create, configure, set_source, export_image, delete | Create and manage embedded charts: create, configure, change source, export PNG, delete. |
-| `excel_shape` | add_image, add_textbox, add_shape, list, move, delete | Add and manage drawing objects (images, text boxes, AutoShapes): add, list, move, delete. |
-| `excel_slicer` | add, add_timeline, list, delete, connect | Manage slicers and date timelines for PivotTables and Tables: add, add_timeline, list, delete, connect. |
-| `excel_sparkline` | add, clear, list | Add, clear, and list in-cell sparkline mini-charts (line, column, win/loss). |
-
-### Formatting / View
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_format` | font, fill, border, number_format, alignment, column_width, row_height, autofit | Apply cell formatting: font, fill, border, number format, alignment, column/row sizing, autofit. |
-| `excel_view` | freeze_panes, unfreeze_panes, gridlines, zoom, headings | Control worksheet display settings: freeze panes, gridlines, zoom, row/column headings. |
-| `excel_conditional_format` | data_bar, color_scale, icon_set, cell_rule, top_bottom, clear | Add or remove conditional formatting rules: data bar, color scale, icon set, cell rule, top/bottom, clear. |
-| `excel_validation` | list, whole_number, decimal, date, text_length, custom, clear | Add or remove data validation on ranges: dropdown list, number/decimal/date/text-length/custom constraints, clear. |
-
-### Page / Print
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_page_setup` | set, print_area, print_titles, header_footer, export_pdf, get | Configure page setup and export to PDF: orientation, paper size, margins, fit-to-page, print area, titles, headers/footers, PDF export. |
-
-### Annotation
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_comment` | add, edit, reply, delete, list, get | Add, edit, reply to, delete, list, and get cell comments (legacy notes and threaded). |
-| `excel_hyperlink` | add, list, delete | Add, list, and delete worksheet hyperlinks (URL, internal, email, file). |
-| `excel_outline` | group_rows, group_columns, ungroup_rows, ungroup_columns, show_levels, clear | Group/ungroup rows and columns, control outline levels, and clear all groupings. |
-| `excel_protection` | protect_sheet, unprotect_sheet, protect_workbook, unprotect_workbook, set_locked, status | Protect/unprotect worksheets and workbooks, set cell lock/formula-hidden flags, and query protection status. |
-
-### Safety
-
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `excel_vba` | list_modules, get_module, write_module, delete_module, run | Manage VBA modules and run macros (opt-in, requires `THEPEXCEL_MCP_ENABLE_VBA=1` and AccessVBOM trust). |
-| `excel_screenshot` | range, sheet, chart | Capture a range, sheet, or chart as PNG for visual verification by the AI agent. |
-| `excel_find_replace` | find, count, replace | Find, count, or replace text across a range, sheet, or entire workbook with match-case and whole-cell options. |
-| `excel_diff` | ranges, sheets | Diff two ranges or two whole sheets cell-by-cell on values, formulas, or both (pure read, no mutation). |
-| `excel_snapshot` | snapshot, list, restore, delete | Non-destructive workbook safety copies: snapshot (SaveCopyAs), list, restore (open copy as new workbook), delete. |
-
-## Environment Variables
+### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `THEPEXCEL_MCP_AUTOLAUNCH` | `1` (on) | Auto-launch a visible Excel instance (+ a blank workbook) if none is running. **On by default** — set to a falsy value (`0`/`false`/`no`/`off`) to disable and require Excel be opened manually. |
-| `THEPEXCEL_MCP_ENABLE_VBA` | unset | Set to `1` to enable the `excel_vba` tool. Off by default for security. |
+| `THEPEXCEL_MCP_AUTOLAUNCH` | `1` (on) | Auto-launch a visible Excel (+ blank workbook) if none is running. Set `0`/`false`/`no`/`off` to require Excel be opened manually. |
+| `THEPEXCEL_MCP_ENABLE_VBA` | unset (off) | Set `1` to enable the `excel_vba` tool. Off by default for security. |
 | `THEPEXCEL_MCP_COM_TIMEOUT` | `120` | Per-call COM timeout in seconds. Increase for slow data refreshes. |
 
-## VBA Setup
+## Platform support
 
-`excel_vba` requires both gates to be open:
+This server drives a real Excel process through Windows COM (`pywin32`), so it is
+**Windows-only by design**:
 
-1. Set the environment variable `THEPEXCEL_MCP_ENABLE_VBA=1` when registering the server.
-2. Enable the trust setting in Excel: **File → Options → Trust Center → Trust Center Settings → Macro Settings → check "Trust access to the VBA project object model".**
+- ✅ **Windows 10 / 11** — fully supported.
+- ❌ **macOS** — Excel for Mac has no COM automation API and `pywin32` does not exist there.
+  Hard platform limitation, not a missing feature.
+- ⚠️ **WSL** — supported via the cross-boundary setup above (server runs as a native Windows process).
 
-Without both, any `excel_vba` call returns a clear error explaining which gate is missing.
+## Safety model
 
-## Using the Bundled Skill
+Letting an AI agent drive your real Excel deserves guardrails. They are built in:
 
-The repository includes a Claude skill at `skills/excel-god/` — a strategy and orchestration guide that helps an AI agent decide which tools to call, in what order, for common Excel tasks (building dashboards, cleaning data with Power Query, setting up a Data Model, etc.).
+- **Snapshots are non-destructive by construction.** `excel_snapshot` uses `SaveCopyAs` — it
+  streams a copy to disk **without** touching the live workbook's saved-state, name, or path.
+  `restore` opens the copy as a **separate new workbook** alongside your original; it never
+  closes, overwrites, or reverts the workbook you are editing. There is deliberately no
+  in-place-revert code path. Encourage your agent to snapshot before risky bulk operations.
+- **Audit what changed.** `excel_diff` compares two ranges or whole sheets cell-by-cell (values,
+  formulas, or both) as a pure read — perfect for before/after verification.
+- **VBA is double-gated.** The `excel_vba` tool requires **both** the
+  `THEPEXCEL_MCP_ENABLE_VBA=1` environment variable **and** Excel's own trust setting
+  (*File → Options → Trust Center → Trust Center Settings → Macro Settings → "Trust access to
+  the VBA project object model"*). Without both, calls return a clear error naming the missing gate.
+- **Verified effects, not just success codes.** Mutating tools read back the actual cell /
+  format / file state after acting; COM errors surface as actionable `ToolError` messages.
+- **Local only.** stdio transport, your machine, your Excel. No network service, no telemetry.
 
-To use it, copy the `excel-god` folder into your skill directory:
+### Known limitations
+
+- **Data Model load can deadlock in headless stdio contexts.** `excel_datamodel(add_table)` and
+  `excel_powerquery(load_to_datamodel)` trigger a Mashup refresh that needs Excel's UI message
+  pump; in a CLI stdio session this can deadlock the COM worker until Excel is force-killed
+  (it works with a fully visible Excel window, e.g. under Claude Desktop). **Fallback that is
+  verified end-to-end:** `load_to_table` → `excel_pivot(create, source="<table>")` — the full
+  cross-file Power Query merge → Table → PivotTable → PivotChart → slicer flow works this way.
+- **Screenshots need a visible Excel window.** `excel_screenshot` and `excel_chart(export_image)`
+  use `CopyPicture`, which requires the window to render on screen — a minimized/hidden Excel can
+  yield empty PNGs.
+- **LAMBDA parameter names** must not look like cell references (`q1`, `x2`) — use `val`, `rate`,
+  `n`. A failed LAMBDA add can leave hidden `_xlpm.*` names that block later adds; use a fresh
+  workbook if that happens.
+- **`=PY()` (Python in Excel)** is inserted but executed asynchronously by Microsoft's cloud
+  service — requires an M365 subscription with Python in Excel; the tool does not wait for the
+  cloud result.
+- **VBA `run`** returns scalars (Long/String/Double) from Functions; Subs return None; arrays and
+  objects are not supported.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| "Excel is not running" but you didn't start it | You don't have to — auto-launch is **on by default** (visible Excel + blank workbook). If you set `THEPEXCEL_MCP_AUTOLAUNCH=0`, open Excel yourself first. |
+| `AttributeError: ... CLSIDToClassMap` masquerading as "Excel not running" | Corrupt win32com `gen_py` early-binding cache. The server **self-heals** this: it clears the cache and retries once, automatically. |
+| Workbook open in a *second* Excel instance not found | Handled: the server scans the Windows Running Object Table (ROT) as a fallback when a workbook isn't in the first Excel instance. |
+| You edited the server code but behavior didn't change | The registered stdio server keeps old code in memory — an editable install is **not** hot reload. Restart the MCP server (e.g. start a fresh client session). |
+| Slow Power Query refresh times out | Raise `THEPEXCEL_MCP_COM_TIMEOUT` (seconds; default 120). |
+| All tool calls hang after a Data-Model load | The known deadlock above — force-close Excel, restart the server, and use the `load_to_table` fallback. |
+| Empty screenshot PNGs | Keep the Excel window visible (not minimized) during `excel_screenshot` / `export_image`. |
+
+## Using the bundled skill
+
+The repo ships a Claude skill at [`skills/excel-god/`](skills/excel-god/) — a strategy and
+orchestration guide that helps an agent decide which tools to call, in what order, for common
+jobs (dashboards, Power Query data cleaning, Data Model setup, …).
 
 ```bash
 # project-level
@@ -295,61 +342,57 @@ cp -r skills/excel-god ~/.claude/skills/
 
 Then invoke it with `/excel-god` in a Claude Code session.
 
-## Troubleshooting / Known Limitations
-
-**Excel is auto-launched if not already running.**
-The server first attaches to the Excel instance in the Windows Running Object Table; if none is found it auto-launches a visible Excel with a blank workbook (on by default — opt out with `THEPEXCEL_MCP_AUTOLAUNCH=0`). It also self-heals a corrupt win32com `gen_py` early-binding cache (which otherwise raises a `CLSIDToClassMap` `AttributeError` that masquerades as "Excel is not running" even when Excel is open).
-
-**Screenshots and chart image export require a visible Excel window.**
-`excel_screenshot` and `excel_chart(export_image)` use Excel's `CopyPicture` API, which needs the window to be rendered on screen. If Excel is minimized or its window is hidden behind other apps, the captured PNG may come out empty. Keep the Excel window visible when using these tools.
-
-**Data Model `add_table` and Power Query `load_to_datamodel` can deadlock in a headless stdio context.**
-Loading data into the in-memory Data Model triggers a Mashup/Power Query refresh that requires Excel's UI message pump. In a Claude Code CLI session (stdio transport, no visible window), this operation can deadlock the COM worker thread and brick all subsequent tool calls until Excel is force-killed. With Claude Desktop and a fully visible Excel window, it works correctly. Fallback: use `excel_powerquery(load_to_table)` to load into a worksheet Table, then build a PivotTable from that table with `excel_pivot(create, source="<table name>")` (this exact flow — cross-file Power Query merge → table → pivot → chart → slicer — is verified end-to-end).
-
-**Named LAMBDA via `excel_name`.**
-Parameter names in a LAMBDA must not look like cell references. Avoid names like `q1`, `x2`, `c3` — use descriptive names such as `val`, `rate`, `n`, or `x` instead. If a LAMBDA add fails partway through, Excel may leave hidden `_xlpm.*` helper names in the workbook that block later LAMBDA adds. If this happens, use a fresh workbook.
-
-**`=PY()` Python in Excel.**
-`excel_range(write_py)` inserts a Python-in-Excel formula, but execution is handled asynchronously by Microsoft's cloud service. It requires an M365 Python in Excel subscription and an active internet connection. The tool inserts the formula; it does not wait for or verify the cloud result.
-
-**VBA `run` return values.**
-`excel_vba(run)` returns scalar values (Long, String, Double) from VBA Functions. Sub procedures return None. Complex return types (arrays, objects) are not supported.
-
-**Windows only.**
-COM is a Windows technology. This server cannot run on macOS or Linux.
-
 ## Development
 
-```bash
+```powershell
 uv sync                                                       # install dependencies
-uv run pytest -q                                              # 927 unit tests, no Excel needed
-THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py  # live COM smoke test (requires Windows + Excel)
+uv run pytest -q                                              # 927 unit tests — mocked COM, no Excel needed
+uv run python tests/smoke_com.py                              # live COM smoke suite (Windows + Excel)
+uv run python tests/smoke_com.py --sections 1,2,3,4           # subset (sections 1–28)
+uv run python scripts/build_mcpb.py                           # build dist/thepexcel-mcp.mcpb
 ```
 
-To run a subset of the smoke test:
+The live smoke suite performs real read-back verification against a running Excel (it launches
+its own instance) and takes roughly 5–10 minutes for all 28 sections.
 
-```bash
-THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py --sections 1,2,3,4
+Project layout, in brief:
+
+```
+src/thepexcel_mcp/
+├── server.py          # FastMCP app — 26 tool registrations; docstrings are the LLM-facing API
+├── session.py         # ExcelSession — STA COM worker thread, run_com(), ROT fallback, guards
+├── domains/           # one module per tool (workbook, ranges, powerquery, pivots, datamodel, …)
+└── analysis/          # M-code static analyzer used by excel_powerquery
+tests/                 # 927 unit tests (mocked COM) + smoke_com.py (live)
+skills/excel-god/      # bundled agent skill
+scripts/build_mcpb.py  # MCPB bundle builder for Claude Desktop
 ```
 
-Sections 1–28 cover all tool categories. The full suite runs in roughly 5–10 minutes depending on Excel startup time.
+Architecture in one line: every tool handler submits its COM callable to a single dedicated
+**STA worker thread** (`run_com()`), which owns the COM apartment — serialized, timeout-guarded,
+with `DisplayAlerts` suppressed around risky operations.
 
 ## Acknowledgments
 
 This project stands on the work of others in the Excel-automation and MCP community:
 
-- **[sbroenne/mcp-server-excel](https://github.com/sbroenne/mcp-server-excel)** (MIT) — the primary reference implementation. A number of the Excel COM automation sequences here were studied and ported from this C# project to Python. If you want a mature C#/.NET COM-based Excel MCP server, theirs is excellent.
-- **[lingfan36/ai-office-mcp](https://github.com/lingfan36/ai-office-mcp)** — design inspiration for the snapshot/undo and range-diff tooling.
-- **[haris-musa/excel-mcp-server](https://github.com/haris-musa/excel-mcp-server)** — a reference for MCP tool API design conventions (file-based, `openpyxl`).
+- **[sbroenne/mcp-server-excel](https://github.com/sbroenne/mcp-server-excel)** (MIT) — the
+  primary reference implementation; a number of Excel COM automation sequences were studied and
+  ported from this C# project to Python. If you want a mature C#/.NET COM-based Excel MCP server,
+  theirs is excellent.
+- **[lingfan36/ai-office-mcp](https://github.com/lingfan36/ai-office-mcp)** — design inspiration
+  for the snapshot/undo and range-diff tooling.
+- **[haris-musa/excel-mcp-server](https://github.com/haris-musa/excel-mcp-server)** — a reference
+  for MCP tool API design conventions (file-based, `openpyxl`).
 
 Upstream license texts are reproduced in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Contributing
 
-Work on a branch and open a pull request — `main` is protected. Please use
-synthetic data only (this is a public repo) and enable the pre-push safety hook.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Work on a branch and open a pull request — `main` is protected. Please use **synthetic data
+only** (this is a public repo) and enable the pre-push safety hook. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT License. Copyright (c) 2026 ThepExcel <thepexcel@gmail.com>.
+[MIT](LICENSE). Copyright (c) 2026 ThepExcel <thepexcel@gmail.com>.
