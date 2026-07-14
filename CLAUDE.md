@@ -106,7 +106,7 @@ to load a query into a worksheet Table. This exact form is required:
 
 Do NOT simplify this — it took real debugging in the PoC to get right.
 
-## Tool registry (Phase 1 + 2 + 3 + 4 + 5 + Tier-4)
+## Tool registry (Phase 1–5 + Tier-3/4/4b — all shipped)
 
 | Tool | Actions |
 |---|---|
@@ -177,7 +177,7 @@ claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMC
 
 ## Future phases
 
-- **Phase 5:** Live end-to-end smoke vs real Excel · packaging (uvx + MCPB bundle for Claude Desktop) · client registration
+- **None outstanding.** All planned phases (0–5) plus Tier-3/4/4b batches have shipped: packaging (`scripts/build_mcpb.py` → `dist/thepexcel-mcp.mcpb`), client registration (`claude mcp add`, see Dev commands above), and live end-to-end smoke vs real Excel (see Session Knowledge log + `docs/ROADMAP.md`) are all done. Only genuinely open idea left: a progressive-disclosure meta-tool if the 26-tool surface grows further (`docs/ROADMAP.md § Later`).
 
 ## Session Knowledge (durable facts — tools, paths, gotchas)
 > Auto-maintained by /session-handoff. Reusable facts only — NOT session status.
