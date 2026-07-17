@@ -5,6 +5,8 @@ purpose: |
 
 # CLAUDE.md — ThepExcelMCP
 
+> **Maintainer runbook** (Fable-authored hand-off, read-on-demand — re-verify facts before relying): `D:/FableLegacy/skills/thepexcelmcp-verify-effect-testing/SKILL.md` (units-green != effect discipline for COM tools) · full library index → `D:/FableLegacy/reviews/2026-07-17-phase1-review.md`
+
 > Windows-only MCP server. Controls live Excel Desktop via COM (pywin32).
 > Gives AI agents full Excel capability beyond what openpyxl can do.
 
