@@ -4,6 +4,11 @@ Requires a live Excel instance (or THEPEXCEL_MCP_AUTOLAUNCH=1).
 Pre-existing workbooks are NEVER touched: all test work uses Workbooks.Add().
 All temp workbooks are closed WITHOUT saving at the end of each section.
 
+Instance teardown contract: a throwaway Excel instance LAUNCHED BY THIS
+HARNESS (get_app() auto-launch, when GetActiveObject fails to attach to an
+already-running Excel) is quit on exit. A pre-existing Excel instance is
+never touched — see tests/_excel_lifecycle.py for the PID-ownership check.
+
 Run: uv run python tests/smoke_com.py
 
 Output: per-section PASS/FAIL/SKIPPED summary, then full report at the end.
@@ -11,6 +16,7 @@ Output: per-section PASS/FAIL/SKIPPED summary, then full report at the end.
 
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 import textwrap
@@ -18,6 +24,8 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from typing import Literal
+
+from _excel_lifecycle import ExcelInstanceGuard
 
 # ── Result tracking ────────────────────────────────────────────────────────────
 
@@ -111,6 +119,7 @@ except ImportError as e:
     sys.exit(1)
 
 _session = ExcelSession()
+_instance_guard = ExcelInstanceGuard(_session)
 
 
 class _SkipImage(Exception):
@@ -3539,14 +3548,20 @@ def run_snapshot() -> None:
 # ── Connectivity check ─────────────────────────────────────────────────────────
 
 def check_excel_running() -> bool:
-    """Return True if Excel is reachable (or was auto-launched)."""
+    """Return True if Excel is reachable (or was auto-launched).
+
+    Snapshots pre-existing Excel PIDs BEFORE this first COM touch, then
+    claims ownership right after — see tests/_excel_lifecycle.py.
+    """
+    _instance_guard.snapshot()
     try:
         _session.run_com(_session.get_app)
-        return True
     except Exception as e:
         print(f"\n  ERROR: Cannot reach Excel: {e}")
         print("  Start Excel manually, or set THEPEXCEL_MCP_AUTOLAUNCH=1.\n")
         return False
+    _instance_guard.claim()
+    return True
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -3606,16 +3621,22 @@ def main() -> None:
     print(f"  SECTIONS={sections_str}")
     print("=" * 60)
 
+    atexit.register(_instance_guard.teardown)
+
     if not check_excel_running():
         print("Aborting — Excel not reachable.")
         sys.exit(1)
 
-    for _, runner in runners:
-        runner()
+    try:
+        for _, runner in runners:
+            runner()
 
-    print_summary()
+        print_summary()
 
-    fails = [r for r in _results if r.status == "FAIL"]
+        fails = [r for r in _results if r.status == "FAIL"]
+    finally:
+        _instance_guard.teardown()
+
     sys.exit(1 if fails else 0)
 
 
