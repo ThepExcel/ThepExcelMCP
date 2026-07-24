@@ -14,7 +14,8 @@ and screenshots so the AI can *see* what it built.
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)](#platform-support)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/unit_tests-927-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/unit_tests-1008-brightgreen)](tests/)
+[![MCP](https://img.shields.io/badge/Model_Context_Protocol-server-8A2BE2)](https://modelcontextprotocol.io)
 
 [Quick start](#quick-start--hand-it-to-your-ai-agent) ·
 [Why live COM?](#why-a-live-excel-not-a-file-library) ·
@@ -346,7 +347,7 @@ Then invoke it with `/excel-god` in a Claude Code session.
 
 ```powershell
 uv sync                                                       # install dependencies
-uv run pytest -q                                              # 927 unit tests — mocked COM, no Excel needed
+uv run pytest -q                                              # 1008 unit tests — mocked COM, no Excel needed
 uv run python tests/smoke_com.py                              # live COM smoke suite (Windows + Excel)
 uv run python tests/smoke_com.py --sections 1,2,3,4           # subset (sections 1–28)
 uv run python scripts/build_mcpb.py                           # build dist/thepexcel-mcp.mcpb
@@ -363,7 +364,7 @@ src/thepexcel_mcp/
 ├── session.py         # ExcelSession — STA COM worker thread, run_com(), ROT fallback, guards
 ├── domains/           # one module per tool (workbook, ranges, powerquery, pivots, datamodel, …)
 └── analysis/          # M-code static analyzer used by excel_powerquery
-tests/                 # 927 unit tests (mocked COM) + smoke_com.py (live)
+tests/                 # 1008 unit tests (mocked COM) + smoke_com.py (live)
 skills/excel-god/      # bundled agent skill
 scripts/build_mcpb.py  # MCPB bundle builder for Claude Desktop
 ```
@@ -391,7 +392,9 @@ Upstream license texts are reproduced in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NO
 
 Work on a branch and open a pull request — `main` is protected. Please use **synthetic data
 only** (this is a public repo) and enable the pre-push safety hook. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Found a security issue? Please report it privately — see [SECURITY.md](SECURITY.md).
 
 ## License
 
