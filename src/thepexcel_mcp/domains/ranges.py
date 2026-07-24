@@ -37,10 +37,15 @@ def range_action(
         Read cell values as a 2-D list. Paginated: default 100 rows.
         Returns: ``{values, total_rows, has_more, next_offset}``.
         Cells with strings >500 chars are truncated with ``…`` appended.
+        Spill metadata is only computed on the offset-0 page (pagination
+        re-pays the same anchor probe for an identical answer on every later
+        page, so it's skipped for ``offset > 0``):
         When a cell is the anchor of a spill, the response includes
         ``has_spill: true`` and ``spill_range``.
-        When a cell is part of a spill (not the anchor), the response includes
-        ``spill_parent`` with the anchor cell address.
+        When the requested range is a single cell (offset 0) that is part of
+        a spill (not the anchor), the response includes ``spill_parent`` with
+        the anchor cell address — this check is skipped for multi-cell reads,
+        where "part of someone else's spill" isn't a meaningful answer.
     read_spill
         Given an anchor cell address, returns the full spill range.
         If the cell has no spill (HasSpill is False), returns a clear error.
@@ -208,22 +213,27 @@ def _read(
         "has_more": has_more,
         "next_offset": offset + limit if has_more else None,
     }
-    # Spill metadata for the top-left cell of the range.
+    # Spill metadata for the top-left cell of the range — offset-0 only.
     # SpillingRange is a newer COM property not exposed via pywin32 late-binding
     # dispatch on all Excel builds. We use a HasSpill row/column scan fallback
     # that is robust across Excel versions (verified 2026-06).
-    try:
-        anchor = rng.Cells(1, 1)
-        if anchor.HasSpill and _is_spill_anchor(anchor):
-            result["has_spill"] = True
-            result["spill_range"] = _spill_range_address(anchor)
-        elif not anchor.HasSpill:
-            # Check if this cell is PART of a spill (not the anchor)
-            parent_addr = _spill_parent_address(anchor)
-            if parent_addr:
-                result["spill_parent"] = parent_addr
-    except Exception:
-        pass  # HasSpill not available in old Excel builds — ignore
+    # Pagination re-pays this same anchor probe (2-4 COM round-trips) on every
+    # page for an identical answer, so it only runs once, on the first page.
+    if offset == 0:
+        try:
+            anchor = rng.Cells(1, 1)
+            if anchor.HasSpill and _is_spill_anchor(anchor):
+                result["has_spill"] = True
+                result["spill_range"] = _spill_range_address(anchor)
+            elif not anchor.HasSpill and total_rows == 1 and total_cols == 1:
+                # "Part of someone else's spill" is only a meaningful question
+                # for a single-cell read — skip the extra SpillParent
+                # round-trip on multi-cell reads.
+                parent_addr = _spill_parent_address(anchor)
+                if parent_addr:
+                    result["spill_parent"] = parent_addr
+        except Exception:
+            pass  # HasSpill not available in old Excel builds — ignore
     return result
 
 
@@ -349,6 +359,11 @@ def _read_spill(
             f"Cell '{range_str}' has no spill range (HasSpill=False). "
             "Use action='read' to read the cell value directly."
         )
+    # Unlike _read's incidental spill metadata, this probe IS the pagination
+    # boundary itself (total_rows/total_cols below come from it) — every
+    # page call needs it, offset 0 included, since each MCP call is stateless
+    # (no cross-call cache of a prior page's spill_addr). Nothing to trim here
+    # without adding a cache, which is out of this pass's scope.
     spill_addr = _spill_range_address(anchor_cell)
     ws = anchor_cell.Parent
     spill_rng = ws.Range(spill_addr)
