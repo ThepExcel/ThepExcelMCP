@@ -110,13 +110,32 @@ class ExcelInstanceGuard:
     def teardown(self) -> None:
         """Quit the harness-owned instance, if any. A no-op when the
         harness attached to a pre-existing Excel instead of spawning its
-        own. Safe to call multiple times."""
+        own. Safe to call multiple times.
+
+        SAFETY: ``get_app()`` returns a CACHED app handle -- if the owned
+        instance died mid-run (or the cache otherwise went stale), calling
+        ``get_app()`` here can silently re-attach to a DIFFERENT Excel (the
+        user's real one) via GetActiveObject. To never Close/Quit the wrong
+        instance, this re-resolves the CURRENT app's PID and only proceeds
+        with Close/Quit when it still equals the claimed ``_owned_pid``. Any
+        mismatch or unknown identity aborts with no COM mutation at all.
+        """
         pid = self._owned_pid
         if pid is None:
             return
 
-        def _do():
+        def _do() -> bool:
             app = self._session.get_app()
+            try:
+                import win32process
+
+                _, cur_pid = win32process.GetWindowThreadProcessId(app.Hwnd)
+            except Exception:
+                return False  # can't confirm identity -> do NOT quit anything
+            if cur_pid != pid:
+                return False  # re-resolved to a DIFFERENT instance -> leave it alone
+
+            # Confirmed: still the same owned instance -> safe to close+quit.
             try:
                 app.DisplayAlerts = False
             except Exception:
@@ -130,11 +149,19 @@ class ExcelInstanceGuard:
                 app.Quit()
             except Exception:
                 pass
+            return True
 
         try:
-            self._session.run_com(_do)
+            quit_attempted = self._session.run_com(_do)
         except Exception:
-            pass
+            quit_attempted = False
+
+        if not quit_attempted:
+            # Identity check failed or mismatched -- nothing was touched.
+            # Leave _owned_pid as-is; there's nothing more this call can
+            # safely do (a last-resort kill would target a PID we could no
+            # longer positively identify as ours).
+            return
 
         # Confirm it's actually gone; poll briefly before the last-resort kill.
         for _ in range(10):
@@ -145,7 +172,9 @@ class ExcelInstanceGuard:
 
         if pid in running_excel_pids():
             # Last resort -- terminate this SAME owned pid only, never a pid
-            # from the pre-existing snapshot.
+            # from the pre-existing snapshot. Gated on quit_attempted (the
+            # identity check just confirmed, moments ago, that this pid WAS
+            # the owned instance) for the same reasoning as above.
             try:
                 import win32api
                 import win32con
