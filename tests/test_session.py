@@ -187,10 +187,24 @@ class TestRewrapEarlybound:
 
 
 class TestMaybeEarlybind:
-    def test_flag_off_returns_same_app_untouched(self, monkeypatch):
-        monkeypatch.delenv("THEPEXCEL_MCP_EARLYBIND", raising=False)
+    def test_kill_switch_returns_same_app_untouched(self, monkeypatch):
+        """THEPEXCEL_MCP_EARLYBIND=0 (or false/no/off) forces late binding —
+        the rewrap is never even attempted."""
+        monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "0")
         app = MagicMock()
         assert _maybe_earlybind(app) is app
+
+    def test_default_unset_attempts_early_bind(self, monkeypatch):
+        """Default (env var unset) is ON as of 2026-07-24 — a successful
+        rewrap is adopted with no env var set at all."""
+        monkeypatch.delenv("THEPEXCEL_MCP_EARLYBIND", raising=False)
+        app = MagicMock()
+        _wire_typelib(app)
+        early = MagicMock()
+        monkeypatch.setattr(session_mod.win32com.client.gencache, "EnsureModule", MagicMock())
+        monkeypatch.setattr(session_mod.win32com.client, "Dispatch", MagicMock(return_value=early))
+
+        assert _maybe_earlybind(app) is early
 
     def test_flag_on_success_adopts_early_bound(self, monkeypatch):
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "1")

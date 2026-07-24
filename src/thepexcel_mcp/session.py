@@ -35,16 +35,21 @@ wait_calculation
 Polls app.CalculationState with pythoncom.PumpWaitingMessages() to avoid
 deadlocking the STA message queue. Never a bare sleep loop.
 
-THEPEXCEL_MCP_EARLYBIND (EXPERIMENTAL, default OFF)
-----------------------------------------------------
-When truthy, get_app() additionally tries to swap the late-bound Application
-handle for an early-bound (win32com.client.gencache) wrapper of the SAME
-running instance, via a zero-activation rewrap (see ``_rewrap_earlybound``):
-the makepy cache is generated from the already-attached object's own typelib
-(no COM activation, so it cannot spin up a duplicate Excel process), then the
-same underlying IDispatch pointer is re-wrapped early-bound. Default is OFF;
-any failure silently falls back to the late-bound object. Flipping the
-default is gated on bench numbers + a full early-bound smoke pass — see
+THEPEXCEL_MCP_EARLYBIND (default ON — kill-switch, flipped 2026-07-24)
+-----------------------------------------------------------------------
+get_app() swaps the late-bound Application handle for an early-bound
+(win32com.client.gencache) wrapper of the SAME running instance, via a
+zero-activation rewrap (see ``_rewrap_earlybound``): the makepy cache is
+generated from the already-attached object's own typelib (no COM activation,
+so it cannot spin up a duplicate Excel process), then the same underlying
+IDispatch pointer is re-wrapped early-bound. Set THEPEXCEL_MCP_EARLYBIND to a
+falsy value (0/false/no/off) to force late binding (kill-switch); any
+rewrap failure also silently falls back to the late-bound object. Flipped to
+default-ON on 2026-07-24 after: bench showed ~1.25x faster property reads
+(709us late vs 568us early, median of 5x1000 property reads) and a full
+smoke_com.py §1-28 run was byte-identical pass/fail between late- and
+early-bound (161/161 checks, same 8 pre-existing datamodel/cube failures,
+zero new regressions) — see
 docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
 """
 
@@ -254,22 +259,25 @@ def _rewrap_earlybound(app: win32com.client.CDispatch) -> win32com.client.CDispa
 
 
 def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
-    """EXPERIMENTAL (opt-in via THEPEXCEL_MCP_EARLYBIND, default OFF).
+    """Default ON as of 2026-07-24; THEPEXCEL_MCP_EARLYBIND is now a KILL-SWITCH.
 
     Swap a late-bound Application handle for an early-bound
     (win32com.client.gencache) wrapper of the SAME running instance via
     ``_rewrap_earlybound`` (zero-activation rewrap — see its docstring).
-    Any failure (including the flag being off) falls back to the original
-    late-bound app; this call is never allowed to raise or spawn a process.
+    Any failure (including the kill-switch being set) falls back to the
+    original late-bound app; this call is never allowed to raise or spawn
+    a process.
 
-    Flipping the default to ON is gated on Phase-0 bench numbers showing a
-    material win *and* a full early-bound smoke pass — a separate decision
-    from this mechanism, tracked in
+    Flipped to default-ON after: bench showed ~1.25x faster property reads
+    (709us late vs 568us early) and a full smoke_com.py §1-28 run was
+    byte-identical pass/fail between late- and early-bound (161/161 checks,
+    zero new regressions vs the late-bound baseline) — see
     docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
+    Set THEPEXCEL_MCP_EARLYBIND=0 (or false/no/off) to force late binding.
     """
-    flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "").strip().lower()
-    if flag not in ("1", "true", "yes", "on"):
-        return app
+    flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return app  # kill-switch: force late binding
     try:
         return _rewrap_earlybound(app)
     except Exception:
