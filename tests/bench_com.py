@@ -13,6 +13,12 @@ the `test_*.py` pattern in pyproject.toml's testpaths (same convention as
 smoke_com.py). Meant to be run standalone; also guarded by
 `if __name__ == "__main__"`.
 
+Instance teardown contract: a throwaway Excel instance LAUNCHED BY THIS
+HARNESS (get_app() auto-launch, when GetActiveObject fails to attach to an
+already-running Excel) is quit on exit, on top of the scratch-workbook
+cleanup below. A pre-existing Excel instance is never touched — see
+tests/_excel_lifecycle.py for the PID-ownership check.
+
 Scenarios (see
 docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md Phase 0),
 each median-of-N (N>=5), printed as µs/op (or ms) to stderr:
@@ -32,10 +38,13 @@ comparison does not depend on the server's opt-in flag.
 
 from __future__ import annotations
 
+import atexit
 import datetime
 import os
 import sys
 import time
+
+from _excel_lifecycle import ExcelInstanceGuard
 
 try:
     from thepexcel_mcp.session import ExcelSession, _rewrap_earlybound
@@ -45,6 +54,7 @@ except ImportError as e:
     sys.exit(1)
 
 _session = ExcelSession()
+_instance_guard = ExcelInstanceGuard(_session)
 
 
 def _log(msg: str) -> None:
@@ -70,13 +80,20 @@ def _col_letter(n: int) -> str:
 # ── Bootstrap (mirrors smoke_com.py's own-instance pattern) ────────────────────
 
 def check_excel_running() -> bool:
+    """Return True if Excel is reachable (or was auto-launched).
+
+    Snapshots pre-existing Excel PIDs BEFORE this first COM touch, then
+    claims ownership right after — see tests/_excel_lifecycle.py.
+    """
+    _instance_guard.snapshot()
     try:
         _session.run_com(_session.get_app)
-        return True
     except Exception as e:
         _log(f"ERROR: Cannot reach Excel: {e}")
         _log("Start Excel manually, or set THEPEXCEL_MCP_AUTOLAUNCH=1.")
         return False
+    _instance_guard.claim()
+    return True
 
 
 def _new_wb() -> str:
@@ -254,6 +271,8 @@ def main() -> None:
     _log(f"  EARLYBIND={os.environ.get('THEPEXCEL_MCP_EARLYBIND', '0')} (should be unset for this script)")
     _log("=" * 60)
 
+    atexit.register(_instance_guard.teardown)
+
     if not check_excel_running():
         sys.exit(1)
 
@@ -277,6 +296,7 @@ def main() -> None:
     finally:
         if wb_name:
             _close_wb(wb_name)
+        _instance_guard.teardown()
 
 
 if __name__ == "__main__":
