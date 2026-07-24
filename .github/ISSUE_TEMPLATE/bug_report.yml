@@ -1,0 +1,79 @@
+name: Bug report
+description: Something in ThepExcelMCP misbehaves against real Excel
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! This server drives **live Excel on Windows via COM**,
+        so environment details matter a lot. Please **never paste real customer or
+        company data** — reduce your repro to synthetic data first.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong?
+      placeholder: |
+        Called excel_pivot(action="create", ...) and got ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal repro
+      description: The exact tool call(s) or steps, using synthetic data only.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: tool
+    attributes:
+      label: Which tool / action
+      placeholder: excel_datamodel(add_measure)
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Code (CLI)
+        - Claude Desktop
+        - Codex CLI
+        - Other (note in description)
+    validations:
+      required: true
+  - type: input
+    id: excel-version
+    attributes:
+      label: Excel version
+      placeholder: "Microsoft 365 Apps, Version 2406 (Build 17726.20126)"
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 23H2"
+  - type: input
+    id: server-version
+    attributes:
+      label: Server version / commit
+      description: Output of `git rev-parse --short HEAD` in your clone.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error / stderr output
+      description: Any ToolError message or stderr lines (redact anything private).
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I reproduced this with synthetic data (no customer/private data in this report).
+          required: true
+        - label: I'm on a current `uv sync` of `main`.
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ThepExcel/ThepExcelMCP/security/advisories/new
+    about: Please report security issues privately, not as a public issue. See SECURITY.md.
+  - name: Question / usage help
+    url: https://github.com/ThepExcel/ThepExcelMCP/discussions
+    about: Ask setup and how-to questions here (enable Discussions if this 404s).

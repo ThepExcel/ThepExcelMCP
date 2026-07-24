@@ -3,10 +3,11 @@
 # Runs the unit-test suite on every push to main and on every pull request.
 #
 # Why windows-latest: this project drives Excel through Windows COM (pywin32),
-# so its dependencies only install on Windows. The 927 unit tests mock COM and
-# need NO running Excel, so they run cleanly on a hosted Windows runner. The
-# live smoke test (tests/smoke_com.py) is intentionally NOT run here — it needs
-# a real Excel Desktop instance, which GitHub-hosted runners do not provide.
+# so its dependencies only install on Windows. The unit tests (~1000, count
+# grows over time) mock COM and need NO running Excel, so they run cleanly on a
+# hosted Windows runner. The live smoke test (tests/smoke_com.py) is
+# intentionally NOT run here — it needs a real Excel Desktop instance, which
+# GitHub-hosted runners do not provide.
 
 name: CI
 

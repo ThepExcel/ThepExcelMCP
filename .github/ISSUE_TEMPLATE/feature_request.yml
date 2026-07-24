@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a new tool, action, or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The Excel task or workflow you want an agent to accomplish.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed tool / action
+      description: |
+        Which tool would this fit under (e.g. a new action on `excel_chart`), or is
+        it a new tool? What would the arguments look like?
+    validations:
+      required: true
+  - type: textarea
+    id: com-notes
+    attributes:
+      label: How would it map to Excel COM (if known)?
+      description: Relevant COM object/method (e.g. `Chart.ApplyDataLabels`), or "not sure".
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / workarounds you've tried
