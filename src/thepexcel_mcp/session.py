@@ -39,11 +39,13 @@ THEPEXCEL_MCP_EARLYBIND (EXPERIMENTAL, default OFF)
 ----------------------------------------------------
 When truthy, get_app() additionally tries to swap the late-bound Application
 handle for an early-bound (win32com.client.gencache) wrapper of the SAME
-running instance. This is opt-in and experimental: win32com.client.Dispatch/
-EnsureDispatch do not attach to a running instance the way GetActiveObject
-does, so a mismatched Hwnd is discarded (kept late-bound) but the COM process
-EnsureDispatch may have spun up in that case is not explicitly closed here.
-Default is OFF; any failure silently falls back to the late-bound object.
+running instance, via a zero-activation rewrap (see ``_rewrap_earlybound``):
+the makepy cache is generated from the already-attached object's own typelib
+(no COM activation, so it cannot spin up a duplicate Excel process), then the
+same underlying IDispatch pointer is re-wrapped early-bound. Default is OFF;
+any failure silently falls back to the late-bound object. Flipping the
+default is gated on bench numbers + a full early-bound smoke pass — see
+docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
 """
 
 from __future__ import annotations
@@ -218,28 +220,60 @@ def wait_calculation(app, timeout: float = 60.0) -> None:
         time.sleep(_CALC_POLL_INTERVAL)
 
 
+def _rewrap_earlybound(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
+    """Construct an early-bound wrapper of *app* — zero-activation rewrap.
+
+    The old approach (`gencache.EnsureDispatch("Excel.Application")`) *activates*
+    COM — it can spin up a brand new Excel process instead of attaching to the
+    running one (hence the old Hwnd-match-or-discard dance). This construction
+    never activates anything:
+
+    1. Read the typelib straight off the already-attached late-bound object
+       (``app._oleobj_.GetTypeInfo()`` → ``GetContainingTypeLib()`` →
+       ``GetLibAttr()``) — version-exact for whatever Office build is actually
+       running, no hard-coded typelib version.
+    2. ``gencache.EnsureModule(guid, lcid, major, minor)`` generates/loads the
+       makepy module for that exact typelib (no COM activation).
+    3. ``win32com.client.Dispatch(app._oleobj_)`` re-wraps the SAME underlying
+       IDispatch pointer — this consults gencache and returns the generated
+       early-bound class around the same running instance. Child objects
+       (Workbooks -> Workbook -> Range) come back early-bound automatically.
+
+    Raises on any failure (missing typelib info, gencache errors, etc.) —
+    callers decide the fallback; this function never silently returns the
+    late-bound app itself, so a caller checking "did I get early-bound back"
+    can rely on a clean exception instead of an ambiguous same-type return.
+    """
+    ti = app._oleobj_.GetTypeInfo()
+    tlb, _idx = ti.GetContainingTypeLib()
+    la = tlb.GetLibAttr()  # (guid, lcid, ?, major, minor, ...) — verified via a
+    # live Application on this machine 2026-07-24: (guid, 0, 1, 1, 9, 8) with
+    # gencache module name ...x0x1x9 → la[3]/la[4] are indeed major/minor.
+    win32com.client.gencache.EnsureModule(la[0], la[1], la[3], la[4])
+    return win32com.client.Dispatch(app._oleobj_)
+
+
 def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
     """EXPERIMENTAL (opt-in via THEPEXCEL_MCP_EARLYBIND, default OFF).
 
-    Try to swap a late-bound Application handle for an early-bound
-    (win32com.client.gencache) wrapper of the SAME running instance.
+    Swap a late-bound Application handle for an early-bound
+    (win32com.client.gencache) wrapper of the SAME running instance via
+    ``_rewrap_earlybound`` (zero-activation rewrap — see its docstring).
+    Any failure (including the flag being off) falls back to the original
+    late-bound app; this call is never allowed to raise or spawn a process.
 
-    win32com.client.Dispatch/EnsureDispatch do not attach to a running
-    instance the way GetActiveObject does — they can spin up a brand new
-    Excel process instead. So the gencache wrapper is adopted ONLY when its
-    .Hwnd matches the already-attached late-bound app; otherwise (including
-    any exception) this silently falls back to the original late-bound app.
+    Flipping the default to ON is gated on Phase-0 bench numbers showing a
+    material win *and* a full early-bound smoke pass — a separate decision
+    from this mechanism, tracked in
+    docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
     """
     flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
         return app
     try:
-        early = win32com.client.gencache.EnsureDispatch("Excel.Application")
-        if early.Hwnd == app.Hwnd:
-            return early
+        return _rewrap_earlybound(app)
     except Exception:
-        pass
-    return app
+        return app
 
 
 def _enum_rot_workbooks(name: str):

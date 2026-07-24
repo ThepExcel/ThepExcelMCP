@@ -14,7 +14,12 @@ from unittest.mock import MagicMock
 from fastmcp.exceptions import ToolError
 
 import thepexcel_mcp.session as session_mod
-from thepexcel_mcp.session import ExcelSession, bulk_guard, _maybe_earlybind
+from thepexcel_mcp.session import (
+    ExcelSession,
+    bulk_guard,
+    _maybe_earlybind,
+    _rewrap_earlybound,
+)
 
 
 # ── get_app() caching ──────────────────────────────────────────────────────────
@@ -135,7 +140,51 @@ class TestBulkGuard:
         assert app.Calculation == -4105
 
 
-# ── _maybe_earlybind ───────────────────────────────────────────────────────────
+# ── _rewrap_earlybound / _maybe_earlybind ──────────────────────────────────────
+
+def _wire_typelib(app: MagicMock, la=("GUID", 0, 1, 1, 9, 8)) -> MagicMock:
+    """Wire app._oleobj_.GetTypeInfo()...GetLibAttr() to return *la*."""
+    tlb = MagicMock()
+    tlb.GetLibAttr.return_value = la
+    ti = MagicMock()
+    ti.GetContainingTypeLib.return_value = (tlb, 0)
+    app._oleobj_.GetTypeInfo.return_value = ti
+    return tlb
+
+
+class TestRewrapEarlybound:
+    def test_success_rewraps_same_pointer_via_gencache(self, monkeypatch):
+        app = MagicMock()
+        _wire_typelib(app, la=("GUID", 0, 1, 1, 9, 8))
+        early = MagicMock()
+        ensure_module = MagicMock()
+        dispatch = MagicMock(return_value=early)
+        monkeypatch.setattr(session_mod.win32com.client.gencache, "EnsureModule", ensure_module)
+        monkeypatch.setattr(session_mod.win32com.client, "Dispatch", dispatch)
+
+        result = _rewrap_earlybound(app)
+
+        assert result is early
+        # guid, lcid, major, minor == la[0], la[1], la[3], la[4]
+        ensure_module.assert_called_once_with("GUID", 0, 1, 9)
+        dispatch.assert_called_once_with(app._oleobj_)
+
+    def test_typelib_lookup_failure_raises(self):
+        app = MagicMock()
+        app._oleobj_.GetTypeInfo.side_effect = Exception("no typeinfo")
+        with pytest.raises(Exception, match="no typeinfo"):
+            _rewrap_earlybound(app)
+
+    def test_gencache_failure_raises(self, monkeypatch):
+        app = MagicMock()
+        _wire_typelib(app)
+        monkeypatch.setattr(
+            session_mod.win32com.client.gencache, "EnsureModule",
+            MagicMock(side_effect=Exception("boom")),
+        )
+        with pytest.raises(Exception, match="boom"):
+            _rewrap_earlybound(app)
+
 
 class TestMaybeEarlybind:
     def test_flag_off_returns_same_app_untouched(self, monkeypatch):
@@ -143,36 +192,32 @@ class TestMaybeEarlybind:
         app = MagicMock()
         assert _maybe_earlybind(app) is app
 
-    def test_flag_on_hwnd_match_adopts_early_bound(self, monkeypatch):
+    def test_flag_on_success_adopts_early_bound(self, monkeypatch):
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "1")
         app = MagicMock()
-        app.Hwnd = 123
+        _wire_typelib(app)
         early = MagicMock()
-        early.Hwnd = 123
-        monkeypatch.setattr(
-            session_mod.win32com.client.gencache, "EnsureDispatch",
-            MagicMock(return_value=early),
-        )
+        monkeypatch.setattr(session_mod.win32com.client.gencache, "EnsureModule", MagicMock())
+        monkeypatch.setattr(session_mod.win32com.client, "Dispatch", MagicMock(return_value=early))
+
         assert _maybe_earlybind(app) is early
 
-    def test_flag_on_hwnd_mismatch_falls_back_to_late_bound(self, monkeypatch):
+    def test_flag_on_rewrap_failure_falls_back_to_late_bound(self, monkeypatch):
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "1")
         app = MagicMock()
-        app.Hwnd = 123
-        early = MagicMock()
-        early.Hwnd = 999  # different instance — EnsureDispatch spun up a new one
-        monkeypatch.setattr(
-            session_mod.win32com.client.gencache, "EnsureDispatch",
-            MagicMock(return_value=early),
-        )
+        app._oleobj_.GetTypeInfo.side_effect = Exception("boom")
+
         assert _maybe_earlybind(app) is app
 
-    def test_flag_on_ensure_dispatch_raises_falls_back(self, monkeypatch):
+    def test_flag_on_never_raises_out(self, monkeypatch):
+        """Any failure inside the rewrap must be swallowed — _maybe_earlybind
+        is called on the get_app() hot path and must never itself raise."""
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "1")
         app = MagicMock()
+        _wire_typelib(app)
         monkeypatch.setattr(
-            session_mod.win32com.client.gencache, "EnsureDispatch",
-            MagicMock(side_effect=Exception("boom")),
+            session_mod.win32com.client.gencache, "EnsureModule",
+            MagicMock(side_effect=Exception("gencache exploded")),
         )
         assert _maybe_earlybind(app) is app
 
