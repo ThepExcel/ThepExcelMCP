@@ -265,6 +265,7 @@ Windows under the hood — offered as guidance, not a separately tested install 
 | `THEPEXCEL_MCP_AUTOLAUNCH` | `1` (on) | Auto-launch a visible Excel (+ blank workbook) if none is running. Set `0`/`false`/`no`/`off` to require Excel be opened manually. |
 | `THEPEXCEL_MCP_ENABLE_VBA` | unset (off) | Set `1` to enable the `excel_vba` tool. Off by default for security. |
 | `THEPEXCEL_MCP_COM_TIMEOUT` | `120` | Per-call COM timeout in seconds. Increase for slow data refreshes. |
+| `THEPEXCEL_MCP_EARLYBIND` | `1` (on) — perf default | Early-bind the Excel COM Application for faster property access (~1.25x on property-heavy loops). Set `0`/`false`/`no`/`off` to force late binding (kill-switch) if you hit a binding-related issue. |
 
 ## Platform support
 

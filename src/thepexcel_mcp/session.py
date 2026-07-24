@@ -35,15 +35,22 @@ wait_calculation
 Polls app.CalculationState with pythoncom.PumpWaitingMessages() to avoid
 deadlocking the STA message queue. Never a bare sleep loop.
 
-THEPEXCEL_MCP_EARLYBIND (EXPERIMENTAL, default OFF)
-----------------------------------------------------
-When truthy, get_app() additionally tries to swap the late-bound Application
-handle for an early-bound (win32com.client.gencache) wrapper of the SAME
-running instance. This is opt-in and experimental: win32com.client.Dispatch/
-EnsureDispatch do not attach to a running instance the way GetActiveObject
-does, so a mismatched Hwnd is discarded (kept late-bound) but the COM process
-EnsureDispatch may have spun up in that case is not explicitly closed here.
-Default is OFF; any failure silently falls back to the late-bound object.
+THEPEXCEL_MCP_EARLYBIND (default ON — kill-switch, flipped 2026-07-24)
+-----------------------------------------------------------------------
+get_app() swaps the late-bound Application handle for an early-bound
+(win32com.client.gencache) wrapper of the SAME running instance, via a
+zero-activation rewrap (see ``_rewrap_earlybound``): the makepy cache is
+generated from the already-attached object's own typelib (no COM activation,
+so it cannot spin up a duplicate Excel process), then the same underlying
+IDispatch pointer is re-wrapped early-bound. Set THEPEXCEL_MCP_EARLYBIND to a
+falsy value (0/false/no/off) to force late binding (kill-switch); any
+rewrap failure also silently falls back to the late-bound object. Flipped to
+default-ON on 2026-07-24 after: bench showed ~1.25x faster property reads
+(709us late vs 568us early, median of 5x1000 property reads) and a full
+smoke_com.py §1-28 run was byte-identical pass/fail between late- and
+early-bound (161/161 checks, same 8 pre-existing datamodel/cube failures,
+zero new regressions) — see
+docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
 """
 
 from __future__ import annotations
@@ -218,28 +225,63 @@ def wait_calculation(app, timeout: float = 60.0) -> None:
         time.sleep(_CALC_POLL_INTERVAL)
 
 
-def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
-    """EXPERIMENTAL (opt-in via THEPEXCEL_MCP_EARLYBIND, default OFF).
+def _rewrap_earlybound(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
+    """Construct an early-bound wrapper of *app* — zero-activation rewrap.
 
-    Try to swap a late-bound Application handle for an early-bound
-    (win32com.client.gencache) wrapper of the SAME running instance.
+    The old approach (`gencache.EnsureDispatch("Excel.Application")`) *activates*
+    COM — it can spin up a brand new Excel process instead of attaching to the
+    running one (hence the old Hwnd-match-or-discard dance). This construction
+    never activates anything:
 
-    win32com.client.Dispatch/EnsureDispatch do not attach to a running
-    instance the way GetActiveObject does — they can spin up a brand new
-    Excel process instead. So the gencache wrapper is adopted ONLY when its
-    .Hwnd matches the already-attached late-bound app; otherwise (including
-    any exception) this silently falls back to the original late-bound app.
+    1. Read the typelib straight off the already-attached late-bound object
+       (``app._oleobj_.GetTypeInfo()`` → ``GetContainingTypeLib()`` →
+       ``GetLibAttr()``) — version-exact for whatever Office build is actually
+       running, no hard-coded typelib version.
+    2. ``gencache.EnsureModule(guid, lcid, major, minor)`` generates/loads the
+       makepy module for that exact typelib (no COM activation).
+    3. ``win32com.client.Dispatch(app._oleobj_)`` re-wraps the SAME underlying
+       IDispatch pointer — this consults gencache and returns the generated
+       early-bound class around the same running instance. Child objects
+       (Workbooks -> Workbook -> Range) come back early-bound automatically.
+
+    Raises on any failure (missing typelib info, gencache errors, etc.) —
+    callers decide the fallback; this function never silently returns the
+    late-bound app itself, so a caller checking "did I get early-bound back"
+    can rely on a clean exception instead of an ambiguous same-type return.
     """
-    flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "").strip().lower()
-    if flag not in ("1", "true", "yes", "on"):
-        return app
+    ti = app._oleobj_.GetTypeInfo()
+    tlb, _idx = ti.GetContainingTypeLib()
+    la = tlb.GetLibAttr()  # (guid, lcid, ?, major, minor, ...) — verified via a
+    # live Application on this machine 2026-07-24: (guid, 0, 1, 1, 9, 8) with
+    # gencache module name ...x0x1x9 → la[3]/la[4] are indeed major/minor.
+    win32com.client.gencache.EnsureModule(la[0], la[1], la[3], la[4])
+    return win32com.client.Dispatch(app._oleobj_)
+
+
+def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
+    """Default ON as of 2026-07-24; THEPEXCEL_MCP_EARLYBIND is now a KILL-SWITCH.
+
+    Swap a late-bound Application handle for an early-bound
+    (win32com.client.gencache) wrapper of the SAME running instance via
+    ``_rewrap_earlybound`` (zero-activation rewrap — see its docstring).
+    Any failure (including the kill-switch being set) falls back to the
+    original late-bound app; this call is never allowed to raise or spawn
+    a process.
+
+    Flipped to default-ON after: bench showed ~1.25x faster property reads
+    (709us late vs 568us early) and a full smoke_com.py §1-28 run was
+    byte-identical pass/fail between late- and early-bound (161/161 checks,
+    zero new regressions vs the late-bound baseline) — see
+    docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
+    Set THEPEXCEL_MCP_EARLYBIND=0 (or false/no/off) to force late binding.
+    """
+    flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return app  # kill-switch: force late binding
     try:
-        early = win32com.client.gencache.EnsureDispatch("Excel.Application")
-        if early.Hwnd == app.Hwnd:
-            return early
+        return _rewrap_earlybound(app)
     except Exception:
-        pass
-    return app
+        return app
 
 
 def _enum_rot_workbooks(name: str):
