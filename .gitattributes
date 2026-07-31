@@ -1,3 +1,6 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+
 # Shell scripts and git hooks must use LF — CRLF breaks them when run by sh.
 *.sh        text eol=lf
 .githooks/* text eol=lf
