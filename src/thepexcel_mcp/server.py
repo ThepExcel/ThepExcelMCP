@@ -1,13 +1,16 @@
 """ThepExcelMCP — FastMCP server entry point.
 
-4 coarse action-dispatch tools; each tool routes to a domain module.
+26 coarse action-dispatch tools; each tool routes to a domain module.
 Tool docstrings are the LLM-facing API — kept precise and example-rich.
 """
 
 from __future__ import annotations
 
+import os
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
+from fastmcp.server.transforms.search import BM25SearchTransform
 
 from .domains.charts import chart_action
 from .domains.comments import comment_action
@@ -36,8 +39,38 @@ from .domains.vba import vba_action
 from .domains.view import view_action
 from .domains.workbook import workbook_action
 
+
+def _tool_discovery_transforms(mode: str | None = None) -> list:
+    """Build the optional progressive-discovery transform list.
+
+    Full catalog visibility remains the compatibility default. ``bm25`` hides
+    the 26 large schemas behind ``search_tools`` + ``call_tool`` while keeping
+    the two most common orientation/read tools visible. This reduces the
+    initial tool catalog by ~94% without changing the underlying tool APIs.
+    """
+    selected = (
+        mode
+        if mode is not None
+        else os.environ.get("THEPEXCEL_MCP_TOOL_DISCOVERY", "full")
+    ).strip().lower()
+    if selected in ("", "full", "off", "0", "false", "no"):
+        return []
+    if selected in ("bm25", "search", "on", "1", "true", "yes"):
+        return [
+            BM25SearchTransform(
+                always_visible=["excel_workbook", "excel_range"],
+                max_results=5,
+            )
+        ]
+    raise ValueError(
+        "THEPEXCEL_MCP_TOOL_DISCOVERY must be 'full' or 'bm25' "
+        f"(got {selected!r})."
+    )
+
+
 mcp = FastMCP(
     "ThepExcelMCP",
+    transforms=_tool_discovery_transforms(),
     instructions=(
         "Controls a live running Excel Desktop instance via COM. "
         "Windows only. Excel must be open before calling any tool. "
@@ -147,6 +180,7 @@ def excel_range(
     offset: int = 0,
     limit: int = 100,
     python_code: str | None = None,
+    value_mode: str = "typed",
 ) -> dict:
     """Read and write cell ranges.
 
@@ -176,6 +210,10 @@ def excel_range(
         Row offset for ``read`` pagination (default 0).
     limit : int, optional
         Max rows to return per ``read`` call (default 100). Reduce for large ranges.
+    value_mode : str, optional
+        For ``read`` / ``read_spill``: ``"typed"`` (default) uses
+        ``Range.Value`` and preserves date/currency Python types; ``"raw"``
+        uses faster ``Range.Value2`` and returns Excel serial numbers.
     python_code : str, optional
         Python source code string for ``write_py``. Multi-line supported
         (use ``\\n`` or actual newlines). Double-quote characters are
@@ -229,6 +267,7 @@ def excel_range(
         offset=offset,
         limit=limit,
         python_code=python_code,
+        value_mode=value_mode,
     )
 
 
@@ -365,6 +404,7 @@ def excel_table(
     columns: list | None = None,
     offset: int = 0,
     limit: int = 100,
+    value_mode: str = "typed",
     values: list | None = None,
     column_name: str | None = None,
     formula: str | None = None,
@@ -405,6 +445,9 @@ def excel_table(
         Row offset for ``read`` pagination (default 0).
     limit : int, optional
         Max rows per ``read`` call (default 100).
+    value_mode : str, optional
+        For ``read``: ``"typed"`` (default) preserves date/currency Python
+        types; ``"raw"`` uses faster ``Range.Value2`` serial values.
     values : list of lists, optional
         2-D list of rows for ``append_rows``.
     column_name : str, optional
@@ -493,6 +536,7 @@ def excel_table(
         columns=columns,
         offset=offset,
         limit=limit,
+        value_mode=value_mode,
         values=values,
         column_name=column_name,
         formula=formula,
@@ -525,6 +569,7 @@ def excel_pivot(
     grand_totals: bool | None = None,
     offset: int = 0,
     limit: int = 100,
+    value_mode: str = "typed",
 ) -> dict:
     """Manage Excel PivotTables — create, configure fields, layout, and read.
 
@@ -565,6 +610,9 @@ def excel_pivot(
         Row offset for ``read`` pagination (default 0).
     limit : int, optional
         Max rows per ``read`` call (default 100).
+    value_mode : str, optional
+        For ``read``: ``"typed"`` (default) preserves date/currency Python
+        types; ``"raw"`` uses faster ``Range.Value2`` serial values.
 
     Actions
     -------
@@ -623,6 +671,7 @@ def excel_pivot(
         grand_totals=grand_totals,
         offset=offset,
         limit=limit,
+        value_mode=value_mode,
     )
 
 

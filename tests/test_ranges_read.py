@@ -142,6 +142,19 @@ class TestReadPageScoped:
         assert result["total_rows"] == 1
         assert result["has_more"] is False
 
+    def test_raw_mode_reads_value2_not_value(self):
+        rng, ws, page_rng, anchor = _make_read_rng_mock(
+            total_rows=2, total_cols=1, row=1, col=1
+        )
+        page_rng.Value = (("typed",), ("typed",))
+        page_rng.Value2 = ((45293.5,), (45294.5,))
+
+        with patch("thepexcel_mcp.domains.ranges._resolve_range", return_value=rng):
+            from thepexcel_mcp.domains.ranges import _read
+            result = _read("A1:A2", None, None, 0, 100, value_mode="raw")
+
+        assert result["values"] == [[45293.5], [45294.5]]
+
     def test_spill_metadata_still_populated(self):
         rng, ws, page_rng, anchor = _make_read_rng_mock(total_rows=5, total_cols=2, row=1, col=1)
         page_rng.Value = tuple((1, 2) for _ in range(5))
@@ -225,6 +238,39 @@ class TestReadSpillPageScoped:
 
         assert result["total_rows"] == 0
         assert result["values"] == []
+
+    def test_raw_mode_spill_reads_value2(self):
+        anchor_cell, ws, resolved = self._make_anchor_and_ws()
+        spill_rng = MagicMock()
+        spill_rng.Rows.Count = 2
+        spill_rng.Columns.Count = 1
+        spill_rng.Row = 1
+        spill_rng.Column = 1
+        page_rng = MagicMock()
+        page_rng.Value = (("typed",), ("typed",))
+        page_rng.Value2 = ((1.25,), (2.5,))
+        ws.Range.side_effect = lambda *args: spill_rng if len(args) == 1 else page_rng
+
+        with patch("thepexcel_mcp.domains.ranges._resolve_range", return_value=resolved):
+            with patch(
+                "thepexcel_mcp.domains.ranges._spill_range_address",
+                return_value="$A$1:$A$2",
+            ):
+                from thepexcel_mcp.domains.ranges import _read_spill
+                result = _read_spill(
+                    "A1", None, None, offset=0, limit=100, value_mode="raw"
+                )
+
+        assert result["values"] == [[1.25], [2.5]]
+
+
+def test_range_action_rejects_invalid_value_mode():
+    import pytest
+    from fastmcp.exceptions import ToolError
+    from thepexcel_mcp.domains.ranges import range_action
+
+    with pytest.raises(ToolError, match="typed.*raw"):
+        range_action("read", range="A1", value_mode="currency")
 
 
 # ── _scan_spill_extent (exponential probe + binary search) ─────────────────────

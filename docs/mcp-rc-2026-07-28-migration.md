@@ -1,7 +1,18 @@
 # MCP RC 2026-07-28 ("Sessionless Core") — ThepExcelMCP Exposure Audit & Migration Plan
 
-> **Audited:** 2026-06-24 · **Method:** live spec verification + code impact map + adversarial red-team (3-agent workflow)
+> **Audited:** 2026-06-24 · **Re-verified:** 2026-08-04 with an MCP SDK 2.0.0 stdio client
 > **Verdict:** **LOW exposure · ZERO code migration required.** The one real risk is an *operational*, time-gated client/server version-skew window (late-July → Sept 2026), not an architectural one.
+
+## 2026-08-04 status
+
+- Dependency hardening is complete: `fastmcp>=3.4.5,<4`, a committed `uv.lock`, and
+  `uv sync --frozen` in CI/bundle builds.
+- `tests/protocol_smoke_v2.py` now launches the real stdio server from an isolated
+  `mcp==2.0.0` client. It verifies negotiation, all 26 tools in full mode, and the
+  optional BM25 discovery surface. The tested pair negotiated protocol `2025-11-25`.
+- FastMCP 3.4.5 currently resolves `mcp 1.28.0`; native sessionless-protocol adoption
+  remains a deliberate future dependency upgrade, but v2-client interoperability no
+  longer depends on a manual tool-list check.
 
 ---
 
@@ -30,9 +41,9 @@ Sources: [RC blog](https://blog.modelcontextprotocol.io/posts/2026-07-28-release
 
 ## Why exposure is LOW (verified)
 
-1. **Transport = stdio only** — `mcp.run(transport="stdio")` at [`server.py:1614`](../src/thepexcel_mcp/server.py). No HTTP/SSE/uvicorn/starlette deps anywhere.
+1. **Transport = stdio only** — `mcp.run(transport="stdio")` in [`server.py`](../src/thepexcel_mcp/server.py). No HTTP/SSE/uvicorn/starlette deps anywhere.
 2. **`Mcp-Session-Id` was never in stdio** — it's an HTTP session-affinity header (SEP-2567). Removing it cannot affect a transport that never sent it.
-3. **All protocol/handshake handling is inside `fastmcp`** — this repo only registers 16 `@mcp.tool` handlers + calls `mcp.run()`. No handler receives a context object, session id, client identity, or per-request protocol metadata (grep-confirmed: 0 hits).
+3. **All protocol/handshake handling is inside `fastmcp`** — this repo registers 26 `@mcp.tool` handlers + calls `mcp.run()`. No handler receives a context object, session id, client identity, or per-request protocol metadata (grep-confirmed: 0 hits).
 4. **`ExcelSession` ≠ MCP session** — [`session.py`](../src/thepexcel_mcp/session.py)'s `ExcelSession` is a single STA COM worker thread holding one live `Excel.Application` handle. Statefulness lives in the **process**, not in any protocol session. The RC's removal of *protocol* sessions is orthogonal to it.
 5. **The spec built a ramp, not a cliff** — a stdio backwards-compat probe (`server/discover`) exists, and SEP-2596 guarantees ≥12 months before any removed method actually breaks.
 
@@ -63,7 +74,7 @@ The MCP lifecycle spec puts the disconnect decision on the **client**: *"If the 
 
 **The brick scenario:** if a Claude Desktop/Code build flips to the sessionless 2026-07-28 client protocol **before** an RC-ready `fastmcp` has been `uv sync`'d **and the stdio process restarted**, the server could silently vanish from Claude's tool list.
 
-- Current locked state: `fastmcp 3.4.2` / `mcp 1.27.2` — speaking the 2025-11-25 spec, **zero** RC support yet.
+- Current locked state (2026-08-04): `fastmcp 3.4.5` / `mcp 1.28.0`; the isolated SDK-v2 probe successfully negotiates `2025-11-25` and lists/calls tools.
 - Mitigating lags: client adoption lags spec publication by weeks–months; SEP-2596's 12-month deprecation window; the `server/discover` compat probe.
 - **Failure signature:** the `thepexcel-excel` tools disappear from Claude (tools not callable) — and it looks **nothing like** a COM/Excel error. Easy to misdiagnose as an Excel problem and burn an hour.
 
@@ -73,22 +84,24 @@ This keeps the verdict at **LOW, not NONE** (correcting the impact-map's over-ro
 
 ## Action items (active + dated — NOT passive "just track fastmcp")
 
-1. **[Optional hardening — needs maintainer sign-off: dependency change]** Tighten the `fastmcp` pin from the open `>=3.0.0` to a tested floor+ceiling and keep `uv.lock` committed for a deterministic bundle. Trade-off: a ceiling forces a *deliberate* bump when the RC-ready release lands (whether it's 3.x or 4.x) instead of a silent auto-pull. `uv.lock` is already committed (exact 3.4.2/1.27.2), so the running bundle is already reproducible today.
-2. **Dated watch (calendar, not vibes).** Watch [gofastmcp.com/changelog](https://gofastmcp.com/changelog) + [fastmcp releases](https://github.com/jlowin/fastmcp/releases) from the **week of June 30 2026** (mcp SDK v2 beta) and again **July 27** (v2 stable). **Buy signal** = a `fastmcp` release whose notes name *MCP 2026-07-28 / SEP-2575 / sessionless / `mcp>=2.0.0`*.
-3. **On the buy signal, run the migration runbook (below) — before observing a break.** Do it proactively, because the break manifests as "Claude can't see the Excel tools," which is easy to misdiagnose.
-4. **Pre-write the diagnostic** into `CLAUDE.md` → `## Session Knowledge` (done as part of this audit): *if post-July-2026 the `thepexcel-excel` MCP silently disappears from Claude's tool list (tools not callable, NOT a COM/Excel error) → suspect MCP protocol skew, not Excel → `uv sync` an RC-ready fastmcp + restart the server.*
+1. **[DONE]** Pin FastMCP to a tested floor+ceiling and commit `uv.lock` for deterministic installs and bundles.
+2. **[DONE]** Put a real SDK-v2 stdio handshake in CI (`tests/protocol_smoke_v2.py`), including tool-list and BM25 search-tool calls.
+3. **Continue the release watch.** The buy signal is a FastMCP release whose notes name MCP 2026-07-28 / SEP-2575 / sessionless / `mcp>=2.0.0`; then make a deliberate lockfile upgrade and rerun the runbook below.
+4. **Keep the diagnostic:** if `thepexcel-excel` disappears from the client tool list without a COM error, suspect protocol skew first, then upgrade/restart the stdio process.
 
 ### Migration runbook (execute only when the buy signal fires)
 
 ```
-1. uv sync                                  # pull the RC-ready fastmcp into the repo venv
-2. THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py   # all tools still pass?
-3. CLIENT-HANDSHAKE CHECK (manual, the real test):
+1. Update the FastMCP constraint deliberately, then `uv lock --upgrade-package fastmcp`
+2. uv sync --frozen                         # install the reviewed lock exactly
+3. THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/smoke_com.py   # all tools still pass?
+4. uv run --isolated --with mcp==2.0.0 python tests/protocol_smoke_v2.py
+5. CLIENT-HANDSHAKE CHECK (manual final mile):
    restart Claude Desktop/Code → confirm "thepexcel-excel" appears in the tool list
    AND one tool call succeeds (e.g. excel_workbook list).
    ⚠ smoke_com.py does NOT exercise the MCP protocol handshake — it owns its own
      Excel and bypasses the stdio layer. exit-0 on smoke is NOT proof of protocol health.
-4. If step 3 fails → the running stdio process is stale: kill + respawn
+6. If step 5 fails → the running stdio process is stale: kill + respawn
    (re-registration via `claude mcp add` is NOT needed). Editable install ≠ hot reload.
 ```
 

@@ -17,6 +17,7 @@ Output: per-section PASS/FAIL/SKIPPED summary, then full report at the end.
 from __future__ import annotations
 
 import atexit
+import datetime
 import os
 import sys
 import textwrap
@@ -256,6 +257,41 @@ def run_workbook_sheet_range() -> None:
         except Exception as e:
             record("range.write_2d_readback", "FAIL", str(e))
 
+        # Value2 is an explicit opt-in because it changes date/currency
+        # semantics. Prove the public action returns a typed datetime by
+        # default and the raw Excel serial only when requested.
+        try:
+            expected_date = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+            def _write_date():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                ws.Range("K1").Value = expected_date
+
+            _session.run_com(_write_date)
+            typed = range_action(
+                "read", range="K1", sheet="Sheet1", workbook=wb_name
+            )["values"][0][0]
+            raw = range_action(
+                "read",
+                range="K1",
+                sheet="Sheet1",
+                workbook=wb_name,
+                value_mode="raw",
+            )["values"][0][0]
+            assert isinstance(typed, datetime.datetime), type(typed)
+            # pywin32 can attach a timezone and normalize the displayed hour;
+            # the important compatibility contract is the datetime type/date.
+            assert typed.date() == expected_date.date(), (typed, expected_date)
+            assert isinstance(raw, (int, float)), type(raw)
+            typed_wall_time = typed.replace(tzinfo=None)
+            expected_serial = (
+                typed_wall_time - datetime.datetime(1899, 12, 30)
+            ).total_seconds() / 86400
+            assert abs(float(raw) - expected_serial) < 1e-9, (raw, expected_serial)
+            record("range.read_value2_raw", "PASS", f"serial={raw}")
+        except Exception as e:
+            record("range.read_value2_raw", "FAIL", str(e))
+
         # write_formula + spill (SEQUENCE)
         try:
             range_action("write_formula", range="E1", formula="=SEQUENCE(5,3)",
@@ -346,6 +382,81 @@ def run_tables() -> None:
             record("table.add_column", "PASS")
         except Exception as e:
             record("table.add_column", "FAIL", str(e))
+
+        # Empty expansion band: append in one ListObject.Resize call, then
+        # verify the last row and calculated-column formula/value through COM.
+        try:
+            bulk_rows = [
+                ["Bulk", f"Item-{i}", "Q4", 1000 + i]
+                for i in range(1000)
+            ]
+            t0 = time.perf_counter()
+            result = table_action(
+                "append_rows", name="Sales", workbook=wb_name, values=bulk_rows
+            )
+            elapsed = time.perf_counter() - t0
+            assert result["appended_rows"] == 1000, result
+            last = table_action(
+                "read",
+                name="Sales",
+                workbook=wb_name,
+                offset=result["total_rows"] - 1,
+                limit=1,
+                value_mode="raw",
+            )
+            assert last["values"][0][:4] == ["Bulk", "Item-999", "Q4", 1999], last
+            assert abs(last["values"][0][4] - 139.93) < 1e-9, last
+
+            def _last_tax_formula():
+                lo = _session.get_workbook(wb_name).Worksheets("Sheet1").ListObjects("Sales")
+                tax = lo.ListColumns("Tax").DataBodyRange
+                return tax.Cells(tax.Rows.Count, 1).Formula
+
+            formula = _session.run_com(_last_tax_formula)
+            assert "Amount" in formula and "0.07" in formula, formula
+            record(
+                "table.append_rows_bulk_resize",
+                "PASS",
+                f"1000 rows in {elapsed:.3f}s; formula={formula}",
+            )
+        except Exception as e:
+            record("table.append_rows_bulk_resize", "FAIL", str(e))
+
+        # Occupied expansion band: the safe fallback must insert below the
+        # table instead of absorbing/overwriting adjacent user data.
+        try:
+            def _setup_adjacent_table():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                ws.Range("H1:I2").Value = [["Key", "Value"], ["A", 1]]
+                ws.Range("H3:I3").Value = [["SENTINEL", 999]]
+
+            _session.run_com(_setup_adjacent_table)
+            table_action(
+                "create",
+                name="AdjacentData",
+                range="H1:I2",
+                sheet="Sheet1",
+                workbook=wb_name,
+            )
+            table_action(
+                "append_rows",
+                name="AdjacentData",
+                workbook=wb_name,
+                values=[["B", 2]],
+            )
+            adjacent = table_action(
+                "read", name="AdjacentData", workbook=wb_name, limit=10
+            )
+            assert adjacent["values"] == [["A", 1], ["B", 2]], adjacent
+
+            def _read_sentinel():
+                ws = _session.get_sheet("Sheet1", wb_name)
+                return ws.Range("H4:I4").Value
+
+            assert _session.run_com(_read_sentinel) == (("SENTINEL", 999.0),)
+            record("table.append_rows_occupied_fallback", "PASS")
+        except Exception as e:
+            record("table.append_rows_occupied_fallback", "FAIL", str(e))
 
         # sort — read-back verifies actual reorder (guards against SortOn=1
         # xlSortOnCellColor no-op bug where sort appeared to succeed but did nothing)
@@ -475,6 +586,15 @@ def run_pivots() -> None:
                    f"total_rows={r['total_rows']}")
         except Exception as e:
             record("pivot.read", "FAIL", str(e))
+
+        try:
+            raw = pivot_action(
+                "read", name="SalesPivot", workbook=wb_name, value_mode="raw"
+            )
+            assert raw["total_rows"] >= 1 and raw["values"], raw
+            record("pivot.read_value2_raw", "PASS")
+        except Exception as e:
+            record("pivot.read_value2_raw", "FAIL", str(e))
 
         # set_layout
         try:

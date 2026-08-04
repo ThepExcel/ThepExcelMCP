@@ -50,6 +50,7 @@ def table_action(
     columns: list[str] | None = None,
     offset: int = 0,
     limit: int = _DEFAULT_LIMIT,
+    value_mode: str = "typed",
     # append_rows
     values: list | None = None,
     # add_column
@@ -88,6 +89,8 @@ def table_action(
         ``columns`` filters to specific column names. Pagination via
         ``offset`` and ``limit`` (default 100). Returns ``{values, columns,
         total_rows, has_more, next_offset}``.
+        ``value_mode="raw"`` uses ``Range.Value2`` for faster bulk reads;
+        the default ``"typed"`` preserves date/currency Python types.
         Note: structured references like ``"SalesTable[Amount]"`` also work
         directly via ``excel_range(action="read", range="SalesTable[Amount]")``.
         Example: ``excel_table(action="read", name="SalesTable", limit=50)``
@@ -143,7 +146,10 @@ def table_action(
         return _session.run_com(_create, name, range, sheet, workbook, style or _DEFAULT_STYLE, has_headers)
     if action == "read":
         _require(name, "name", action)
-        return _session.run_com(_read, name, workbook, columns, offset, limit)
+        _validate_value_mode(value_mode)
+        return _session.run_com(
+            _read, name, workbook, columns, offset, limit, value_mode
+        )
     if action == "append_rows":
         _require(name, "name", action)
         if not values:
@@ -191,6 +197,11 @@ def table_action(
 def _require(value, param: str, action: str) -> None:
     if value is None:
         raise ToolError(f"action='{action}' requires '{param}'.")
+
+
+def _validate_value_mode(value_mode: str) -> None:
+    if value_mode not in ("typed", "raw"):
+        raise ToolError("value_mode must be 'typed' or 'raw'.")
 
 
 def _find_table(wb, name: str, sheet: str | None = None):
@@ -322,6 +333,7 @@ def _read(
     columns: list[str] | None,
     offset: int,
     limit: int,
+    value_mode: str = "typed",
 ) -> dict:
     wb = _session.get_workbook(workbook)
     lo = _find_table(wb, name)
@@ -364,7 +376,7 @@ def _read(
             ws.Cells(r1 + offset, c1),
             ws.Cells(last_row, c1 + total_cols - 1),
         )
-        raw = page_rng.Value
+        raw = page_rng.Value2 if value_mode == "raw" else page_rng.Value
         if raw is None:
             page = []
         elif not isinstance(raw, tuple):
@@ -385,6 +397,49 @@ def _read(
     }
 
 
+def _data_row_count(lo) -> int:
+    dbr = lo.DataBodyRange
+    return dbr.Rows.Count if dbr is not None else 0
+
+
+def _try_resize_for_append(lo, rows_to_add: int) -> bool:
+    """Grow a table in one COM call when its expansion band is truly empty.
+
+    ``ListObject.Resize`` is a real method (unlike pywin32's problematic
+    ``Range.Resize`` indexed property) and was live-verified with calculated
+    columns. It is only safe when every cell directly below the table is
+    empty; otherwise Resize would absorb adjacent user data into the table.
+    Any uncertain/error path returns False so the caller can use the slower
+    insertion-preserving ``ListRows.Add`` fallback.
+    """
+    if rows_to_add <= 0:
+        return True
+
+    try:
+        table_rng = lo.Range
+        ws = table_rng.Parent
+        top = table_rng.Row
+        left = table_rng.Column
+        current_range_rows = table_rng.Rows.Count
+        table_cols = table_rng.Columns.Count
+        bottom = top + current_range_rows - 1
+        expansion = ws.Range(
+            ws.Cells(bottom + 1, left),
+            ws.Cells(bottom + rows_to_add, left + table_cols - 1),
+        )
+        if lo.Parent.Application.WorksheetFunction.CountA(expansion) != 0:
+            return False
+
+        expanded_range = ws.Range(
+            ws.Cells(top, left),
+            ws.Cells(bottom + rows_to_add, left + table_cols - 1),
+        )
+        lo.Resize(expanded_range)
+        return True
+    except Exception:
+        return False
+
+
 def _append_rows(name: str, workbook: str | None, values: list) -> dict:
     wb = _session.get_workbook(workbook)
     lo = _find_table(wb, name)
@@ -399,10 +454,30 @@ def _append_rows(name: str, workbook: str | None, values: list) -> dict:
         lo.ListColumns.Count,
         max((len(r) if isinstance(r, (list, tuple)) else 1) for r in values),
     )
+    initial_row_count = _data_row_count(lo)
+    target_row_count = initial_row_count + len(values)
     try:
         with bulk_guard(wb.Application):
-            for _ in values:
+            _try_resize_for_append(lo, len(values))
+
+            # Resize is atomic when it succeeds, but verify the actual effect.
+            # If it failed or did nothing, add only the missing rows with the
+            # insertion-preserving legacy path. Never trust the COM return.
+            current_row_count = _data_row_count(lo)
+            if current_row_count > target_row_count:
+                raise ToolError(
+                    f"Append rows to '{name}' grew the table unexpectedly "
+                    f"({current_row_count} rows; expected {target_row_count})."
+                )
+            for _ in range(target_row_count - current_row_count):
                 lo.ListRows.Add()
+
+            actual_row_count = _data_row_count(lo)
+            if actual_row_count != target_row_count:
+                raise ToolError(
+                    f"Append rows to '{name}' had no verified effect: "
+                    f"expected {target_row_count} rows, got {actual_row_count}."
+                )
 
             if n_cols > 0:
                 dbr = lo.DataBodyRange
@@ -431,8 +506,7 @@ def _append_rows(name: str, workbook: str | None, values: list) -> dict:
                 )
                 block.Value = padded
 
-        dbr = lo.DataBodyRange
-        new_row_count = dbr.Rows.Count if dbr is not None else 0
+        new_row_count = _data_row_count(lo)
         return {
             "table": name,
             "appended_rows": len(values),
