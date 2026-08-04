@@ -248,18 +248,22 @@ class TestMaybeEarlybind:
 
         assert _maybe_earlybind(app) is early
 
-    def test_flag_on_rewrap_failure_falls_back_to_late_bound(self, monkeypatch):
+    def test_flag_on_rewrap_failure_keeps_the_working_handle(self, monkeypatch):
+        """On rewrap failure, return the handle that already works — do NOT
+        construct a fresh dynamic wrapper. The 2026-08-04 live-COM incident:
+        the replacement wrapper's .Range/.Name access failed against a stale
+        makepy cache, turning a recoverable rewrap failure into a hard break.
+        """
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "1")
         app = MagicMock()
         app._oleobj_.GetTypeInfo.side_effect = Exception("boom")
-        late = MagicMock()
+        dynamic_dispatch = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(
-            session_mod.win32com.client.dynamic,
-            "Dispatch",
-            MagicMock(return_value=late),
+            session_mod.win32com.client.dynamic, "Dispatch", dynamic_dispatch
         )
 
-        assert _maybe_earlybind(app) is late
+        assert _maybe_earlybind(app) is app
+        dynamic_dispatch.assert_not_called()
 
     def test_flag_on_never_raises_out(self, monkeypatch):
         """Any failure inside the rewrap must be swallowed — _maybe_earlybind

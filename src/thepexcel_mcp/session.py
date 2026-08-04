@@ -300,10 +300,12 @@ def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatc
     try:
         return _rewrap_earlybound(app)
     except Exception:
-        try:
-            return _force_latebound(app)
-        except Exception:
-            return app
+        # Never replace a handle that already works with an unproven one on an
+        # error path: *app* is the object GetActiveObject/_launch just returned
+        # and is known reachable. Constructing a fresh dynamic wrapper here
+        # (the 2026-08-04 behaviour) turns a recoverable rewrap failure into a
+        # hard break when that wrapper's .Range/.Name access fails.
+        return app
 
 
 def _clear_gen_py_cache() -> None:
