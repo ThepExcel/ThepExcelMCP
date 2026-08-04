@@ -92,7 +92,6 @@ def pivot_action(
     # read (pagination)
     offset: int = 0,
     limit: int = _DEFAULT_LIMIT,
-    value_mode: str = "typed",
 ) -> dict:
     """Dispatch an Excel PivotTable action.
 
@@ -148,8 +147,6 @@ def pivot_action(
     read
         Read the PivotTable result values paginated via TableRange2.
         Returns ``{values, total_rows, has_more, next_offset}``.
-        ``value_mode="raw"`` uses ``Range.Value2`` for faster bulk reads;
-        the default ``"typed"`` preserves date/currency Python types.
         Example: ``excel_pivot(action="read", name="SalesPivot", limit=50)``
     """
     # Validate args (pure Python) before entering the COM worker
@@ -184,9 +181,7 @@ def pivot_action(
         return _session.run_com(_delete, name, workbook)
     if action == "read":
         _require(name, "name", action)
-        if value_mode not in ("typed", "raw"):
-            raise ToolError("value_mode must be 'typed' or 'raw'.")
-        return _session.run_com(_read, name, workbook, offset, limit, value_mode)
+        return _session.run_com(_read, name, workbook, offset, limit)
     raise ToolError(
         f"Unknown action '{action}'. Valid: list, create, add_field, remove_field, "
         "move_field, set_layout, refresh, delete, read."
@@ -366,16 +361,19 @@ def _create(
     wb = _session.get_workbook(workbook)
     app = wb.Application
 
-    # Resolve a worksheet/table source to the SourceData string. Data Model
-    # pivots use their workbook connection directly in the branch below.
+    # Resolve source → source_data string and source_type constant
     is_datamodel = source.strip().lower() == "datamodel"
-    source_data = None
-    if not is_datamodel:
+
+    if is_datamodel:
+        source_type = _XL_EXTERNAL
+    else:
         # If source looks like a table name (no ! and no space or colon), look it up
         if "!" not in source and ":" not in source:
             source_data = _find_table_range(wb, source)
         else:
             source_data = source
+        source_type = _XL_DATABASE
+
     # Determine destination sheet and cell
     dest_ws = _resolve_dest_sheet(wb, app, dest_sheet, name, workbook)
     cell_addr = dest_cell or "A3"
@@ -694,13 +692,7 @@ def _delete(name: str, workbook: str | None) -> dict:
         raise _session.wrap(e, f"Delete PivotTable '{name}' failed")
 
 
-def _read(
-    name: str,
-    workbook: str | None,
-    offset: int,
-    limit: int,
-    value_mode: str = "typed",
-) -> dict:
+def _read(name: str, workbook: str | None, offset: int, limit: int) -> dict:
     wb = _session.get_workbook(workbook)
     pt = _find_pivot(wb, name)
     try:
@@ -709,8 +701,7 @@ def _read(
         total_rows = rng.Rows.Count
         total_cols = rng.Columns.Count
 
-        anchor_value = rng.Value2 if value_mode == "raw" else rng.Value
-        if total_rows == 1 and total_cols == 1 and anchor_value is None:
+        if total_rows == 1 and total_cols == 1 and rng.Value is None:
             return {"values": [], "total_rows": 0, "has_more": False, "next_offset": None}
 
         if offset >= total_rows:
@@ -726,7 +717,7 @@ def _read(
                 ws.Cells(r1 + offset, c1),
                 ws.Cells(last_row, c1 + total_cols - 1),
             )
-            raw = page_rng.Value2 if value_mode == "raw" else page_rng.Value
+            raw = page_rng.Value
             if raw is None:
                 rows = []
             elif not isinstance(raw, tuple):

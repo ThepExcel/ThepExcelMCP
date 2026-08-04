@@ -44,22 +44,20 @@ generated from the already-attached object's own typelib (no COM activation,
 so it cannot spin up a duplicate Excel process), then the same underlying
 IDispatch pointer is re-wrapped early-bound. Set THEPEXCEL_MCP_EARLYBIND to a
 falsy value (0/false/no/off) to force late binding (kill-switch); any
-rewrap failure also silently falls back to an explicitly dynamic wrapper.
-Flipped to default-ON on 2026-07-24. Corrected 2026-08-04 benchmarks that
-force both wrapper types around the same IDispatch pointer measured modest
-gains (9% faster property reads in the latest run); live effect smoke is
-the compatibility oracle. Corrupt makepy recovery clears both the on-disk
-cache and loaded ``win32com.gen_py.*`` modules so retry works in-process. See
+rewrap failure also silently falls back to the late-bound object. Flipped to
+default-ON on 2026-07-24 after: bench showed ~1.25x faster property reads
+(709us late vs 568us early, median of 5x1000 property reads) and a full
+smoke_com.py §1-28 run was byte-identical pass/fail between late- and
+early-bound (161/161 checks, same 8 pre-existing datamodel/cube failures,
+zero new regressions) — see
 docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
 """
 
 from __future__ import annotations
 
 import contextlib
-import importlib
 import os
 import queue
-import shutil
 import sys
 import threading
 import time
@@ -67,7 +65,6 @@ from concurrent.futures import Future
 from typing import Any, Callable
 
 import pythoncom
-import win32com
 import win32com.client
 from fastmcp.exceptions import ToolError
 
@@ -261,71 +258,30 @@ def _rewrap_earlybound(app: win32com.client.CDispatch) -> win32com.client.CDispa
     return win32com.client.Dispatch(app._oleobj_)
 
 
-def _force_latebound(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
-    """Wrap *app* dynamically around the same underlying COM pointer.
-
-    ``GetActiveObject`` may return a generated ``gen_py`` wrapper whenever a
-    makepy cache exists, so merely skipping the early-bind rewrap does not
-    actually force late binding. The kill-switch and benchmark both need an
-    explicit dynamic wrapper to make the selected mode real and measurable.
-    """
-    if type(app).__module__ == "win32com.client.dynamic":
-        return app
-    return win32com.client.dynamic.Dispatch(app._oleobj_)
-
-
 def _maybe_earlybind(app: win32com.client.CDispatch) -> win32com.client.CDispatch:
     """Default ON as of 2026-07-24; THEPEXCEL_MCP_EARLYBIND is now a KILL-SWITCH.
 
     Swap a late-bound Application handle for an early-bound
     (win32com.client.gencache) wrapper of the SAME running instance via
     ``_rewrap_earlybound`` (zero-activation rewrap — see its docstring).
-    The kill-switch explicitly constructs a dynamic wrapper because
-    ``GetActiveObject`` itself may return a generated wrapper when ``gen_py``
-    exists. Any early-bind failure also falls back to that explicit dynamic
-    wrapper. This call never activates COM or spawns a process.
+    Any failure (including the kill-switch being set) falls back to the
+    original late-bound app; this call is never allowed to raise or spawn
+    a process.
 
-    Corrected 2026-08-04 benchmarks measured modest gains (9% faster property
-    reads in the latest run). The live smoke suite remains
-    the effect oracle — see
+    Flipped to default-ON after: bench showed ~1.25x faster property reads
+    (709us late vs 568us early) and a full smoke_com.py §1-28 run was
+    byte-identical pass/fail between late- and early-bound (161/161 checks,
+    zero new regressions vs the late-bound baseline) — see
     docs/superpowers/plans/2026-07-24-perf-round2-constant-factor.md.
     Set THEPEXCEL_MCP_EARLYBIND=0 (or false/no/off) to force late binding.
     """
     flag = os.environ.get("THEPEXCEL_MCP_EARLYBIND", "1").strip().lower()
     if flag in ("0", "false", "no", "off"):
-        try:
-            return _force_latebound(app)
-        except Exception:
-            return app  # keep Excel reachable if dynamic wrapping itself fails
+        return app  # kill-switch: force late binding
     try:
         return _rewrap_earlybound(app)
     except Exception:
-        try:
-            return _force_latebound(app)
-        except Exception:
-            return app
-
-
-def _clear_gen_py_cache() -> None:
-    """Clear a corrupt pywin32 makepy cache for an in-process retry.
-
-    Deleting the on-disk ``gen_py`` directory alone is insufficient: the
-    broken generated module remains in ``sys.modules`` and the immediate
-    retry imports that same object again. Evict generated children, rebuild
-    the cache index, and invalidate import caches so recovery does not require
-    restarting the Python process.
-    """
-    shutil.rmtree(win32com.__gen_path__, ignore_errors=True)
-    for module_name in list(sys.modules):
-        if module_name.startswith("win32com.gen_py."):
-            sys.modules.pop(module_name, None)
-    importlib.invalidate_caches()
-    try:
-        win32com.client.gencache.Rebuild()
-    except Exception:
-        # Dispatch can regenerate the exact typelib lazily. The critical step
-        # is evicting the corrupt in-memory generated module above.
-        pass
+        return app
 
 
 def _enum_rot_workbooks(name: str):
@@ -432,6 +388,15 @@ class ExcelSession:
                 return _cached_app
             except Exception:
                 _cached_app = None  # stale handle (Excel closed/crashed) — re-resolve
+
+        def _clear_gen_py_cache() -> None:
+            try:
+                import shutil
+                import win32com as _w
+
+                shutil.rmtree(_w.__gen_path__, ignore_errors=True)
+            except Exception:
+                pass
 
         def _attach() -> win32com.client.CDispatch:
             return win32com.client.GetActiveObject("Excel.Application")

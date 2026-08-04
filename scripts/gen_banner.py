@@ -9,9 +9,10 @@ Outputs:
 """
 
 import math
+import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # ---------------------------------------------------------------------------
 # Brand tokens (ThepExcel brand-guidelines canonical)
@@ -101,6 +102,7 @@ def draw_ai_core(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int):
     """Concentric rings + pulsing rays radiating from the AI core centre."""
     # Outer dashed rings
     for i, r in enumerate([radius, int(radius * 0.72), int(radius * 0.48)]):
+        alpha_mul = [80, 130, 180][i]
         # Draw ring as many small arcs (simulate dashed)
         n_segments = 60
         for seg in range(n_segments):
@@ -108,6 +110,7 @@ def draw_ai_core(draw: ImageDraw.ImageDraw, cx: int, cy: int, radius: int):
                 continue  # gap
             angle_start = seg * (360 / n_segments)
             angle_end   = angle_start + (360 / n_segments) * 0.7
+            col = (*GOLD, alpha_mul)
             draw.arc([cx - r, cy - r, cx + r, cy + r],
                      start=angle_start, end=angle_end,
                      fill=GOLD_DIM if i == 0 else GOLD,
@@ -170,6 +173,8 @@ def draw_capability_chips(img: Image.Image, draw: ImageDraw.ImageDraw,
                               outline=(*color, 180),
                               width=2)
         img.paste(chip_bg, (x, y), chip_bg)
+        draw_ref = draw  # draw on main image
+
         # Badge circle
         badge_r = chip_h // 2 - 8
         bx = x + badge_r + 10
@@ -191,6 +196,7 @@ def draw_capability_chips(img: Image.Image, draw: ImageDraw.ImageDraw,
             if sp > 0:
                 parts = [label[:sp], label[sp + 1:]]
         label_x = bx + badge_r + 10
+        line_h = chip_h // 2 - 4 if len(parts) > 1 else chip_h // 2
         for li, part in enumerate(parts):
             lw, lh = text_size(draw, part, font_label)
             ly_offset = -lh // 2 + (li - (len(parts) - 1) / 2) * (lh + 2)

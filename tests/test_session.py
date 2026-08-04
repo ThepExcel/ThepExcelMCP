@@ -16,8 +16,6 @@ from fastmcp.exceptions import ToolError
 import thepexcel_mcp.session as session_mod
 from thepexcel_mcp.session import (
     ExcelSession,
-    _clear_gen_py_cache,
-    _force_latebound,
     bulk_guard,
     _maybe_earlybind,
     _rewrap_earlybound,
@@ -60,7 +58,7 @@ class TestGetAppCaching:
         fresh = MagicMock()
         fresh.Name = "Excel"
         monkeypatch.setattr(session_mod.win32com.client, "GetActiveObject", MagicMock(return_value=fresh))
-        monkeypatch.setattr(session_mod, "_maybe_earlybind", lambda app: app)
+        monkeypatch.delenv("THEPEXCEL_MCP_EARLYBIND", raising=False)
 
         result = ExcelSession().get_app()
 
@@ -71,7 +69,7 @@ class TestGetAppCaching:
         fresh = MagicMock()
         fresh.Name = "Excel"
         monkeypatch.setattr(session_mod.win32com.client, "GetActiveObject", MagicMock(return_value=fresh))
-        monkeypatch.setattr(session_mod, "_maybe_earlybind", lambda app: app)
+        monkeypatch.delenv("THEPEXCEL_MCP_EARLYBIND", raising=False)
 
         sess = ExcelSession()
         first = sess.get_app()
@@ -94,23 +92,6 @@ class TestGetAppCaching:
 
         with pytest.raises(ToolError, match="auto-launch is disabled"):
             ExcelSession().get_app()
-
-    def test_corrupt_gen_py_attach_recovers_in_same_process(self, monkeypatch):
-        fresh = MagicMock()
-        fresh.Name = "Excel"
-        get_active = MagicMock(
-            side_effect=[AttributeError("missing CLSIDToPackageMap"), fresh]
-        )
-        clear_cache = MagicMock()
-        monkeypatch.setattr(session_mod.win32com.client, "GetActiveObject", get_active)
-        monkeypatch.setattr(session_mod, "_clear_gen_py_cache", clear_cache)
-        monkeypatch.setattr(session_mod, "_maybe_earlybind", lambda app: app)
-
-        result = ExcelSession().get_app()
-
-        assert result is fresh
-        assert get_active.call_count == 2
-        clear_cache.assert_called_once()
 
 
 # ── bulk_guard ─────────────────────────────────────────────────────────────────
@@ -206,25 +187,12 @@ class TestRewrapEarlybound:
 
 
 class TestMaybeEarlybind:
-    def test_kill_switch_constructs_dynamic_wrapper(self, monkeypatch):
-        """Skipping the rewrap is insufficient when GetActiveObject already
-        returned a generated wrapper; the kill-switch must force dynamic."""
+    def test_kill_switch_returns_same_app_untouched(self, monkeypatch):
+        """THEPEXCEL_MCP_EARLYBIND=0 (or false/no/off) forces late binding —
+        the rewrap is never even attempted."""
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "0")
         app = MagicMock()
-        late = MagicMock()
-        dispatch = MagicMock(return_value=late)
-        monkeypatch.setattr(session_mod.win32com.client.dynamic, "Dispatch", dispatch)
-
-        assert _maybe_earlybind(app) is late
-        dispatch.assert_called_once_with(app._oleobj_)
-
-    def test_force_latebound_keeps_existing_dynamic_wrapper(self):
-        class DynamicApp:
-            pass
-
-        DynamicApp.__module__ = "win32com.client.dynamic"
-        app = DynamicApp()
-        assert _force_latebound(app) is app
+        assert _maybe_earlybind(app) is app
 
     def test_default_unset_attempts_early_bind(self, monkeypatch):
         """Default (env var unset) is ON as of 2026-07-24 — a successful
@@ -252,14 +220,8 @@ class TestMaybeEarlybind:
         monkeypatch.setenv("THEPEXCEL_MCP_EARLYBIND", "1")
         app = MagicMock()
         app._oleobj_.GetTypeInfo.side_effect = Exception("boom")
-        late = MagicMock()
-        monkeypatch.setattr(
-            session_mod.win32com.client.dynamic,
-            "Dispatch",
-            MagicMock(return_value=late),
-        )
 
-        assert _maybe_earlybind(app) is late
+        assert _maybe_earlybind(app) is app
 
     def test_flag_on_never_raises_out(self, monkeypatch):
         """Any failure inside the rewrap must be swallowed — _maybe_earlybind
@@ -271,30 +233,7 @@ class TestMaybeEarlybind:
             session_mod.win32com.client.gencache, "EnsureModule",
             MagicMock(side_effect=Exception("gencache exploded")),
         )
-        monkeypatch.setattr(
-            session_mod.win32com.client.dynamic,
-            "Dispatch",
-            MagicMock(side_effect=Exception("dynamic exploded")),
-        )
         assert _maybe_earlybind(app) is app
-
-
-def test_clear_gen_py_cache_evicts_generated_modules_and_rebuilds(monkeypatch):
-    fake_module = "win32com.gen_py.fake_excel_typelib"
-    monkeypatch.setitem(session_mod.sys.modules, fake_module, object())
-    remove_tree = MagicMock()
-    rebuild = MagicMock()
-    invalidate = MagicMock()
-    monkeypatch.setattr(session_mod.shutil, "rmtree", remove_tree)
-    monkeypatch.setattr(session_mod.win32com.client.gencache, "Rebuild", rebuild)
-    monkeypatch.setattr(session_mod.importlib, "invalidate_caches", invalidate)
-
-    _clear_gen_py_cache()
-
-    remove_tree.assert_called_once_with(session_mod.win32com.__gen_path__, ignore_errors=True)
-    assert fake_module not in session_mod.sys.modules
-    invalidate.assert_called_once()
-    rebuild.assert_called_once()
 
 
 # ── run_com slow-call diagnostic ──────────────────────────────────────────────

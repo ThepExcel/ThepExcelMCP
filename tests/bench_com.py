@@ -28,14 +28,12 @@ each median-of-N (N>=5), printed as µs/op (or ms) to stderr:
   (c) `excel_format` border=all on a 50x10 range (property-heavy write loop),
       wall-clock, through the actual `format_action` tool entry point.
   (d) fixed per-call floor: `_session.run_com(...)` round-trip x100.
-  (e) `excel_table.append_rows` with 1,000 rows into an empty expansion band,
-      including calculated-column read-back through the actual tool entry point.
 
-The script explicitly creates both wrappers around the same IDispatch pointer:
-``_force_latebound()`` for dynamic dispatch and ``_rewrap_earlybound()`` for
-generated dispatch. This is required because ``GetActiveObject`` can itself
-return a generated wrapper whenever ``gen_py`` exists, even with the server's
-kill-switch set.
+Run this script WITHOUT THEPEXCEL_MCP_EARLYBIND set. It forces both bindings
+itself: `_session.get_app()` gives the ordinary (late-bound, when the flag is
+unset) cached Application, and `_rewrap_earlybound()` is called directly on
+that same handle to get the early-bound counterpart for comparison — the
+comparison does not depend on the server's opt-in flag.
 """
 
 from __future__ import annotations
@@ -49,13 +47,8 @@ import time
 from _excel_lifecycle import ExcelInstanceGuard
 
 try:
-    from thepexcel_mcp.session import (
-        ExcelSession,
-        _force_latebound,
-        _rewrap_earlybound,
-    )
+    from thepexcel_mcp.session import ExcelSession, _rewrap_earlybound
     from thepexcel_mcp.domains.format import format_action
-    from thepexcel_mcp.domains.tables import table_action
 except ImportError as e:
     print(f"Import failed: {e}", file=sys.stderr)
     sys.exit(1)
@@ -158,9 +151,7 @@ def _seed_block_data(wb_name: str, sheet_name: str, rows: int, cols: int) -> Non
 
 def bench_property_read(wb_name: str, n: int = 1000, reps: int = 5) -> None:
     def _do_late():
-        app = _force_latebound(_session.get_app())
-        assert type(app).__module__ == "win32com.client.dynamic"
-        ws = app.Workbooks(wb_name).Sheets("Sheet1")
+        ws = _session.get_sheet("Sheet1", wb_name)
         cell = ws.Cells(1, 1)
         cell.Value = 42
         samples = []
@@ -172,9 +163,8 @@ def bench_property_read(wb_name: str, n: int = 1000, reps: int = 5) -> None:
         return _median(samples)
 
     def _do_early():
-        app = _force_latebound(_session.get_app())
+        app = _session.get_app()
         early = _rewrap_earlybound(app)  # zero-activation rewrap, same pointer
-        assert type(early).__module__.startswith("win32com.gen_py.")
         wb = early.Workbooks(wb_name)
         ws = wb.Sheets("Sheet1")
         cell = ws.Cells(1, 1)
@@ -272,72 +262,13 @@ def bench_percall_floor(n: int = 100, reps: int = 5) -> None:
     _log(f"(d) per-call floor x{n} (median of {reps} reps): {per_call_us:.2f}us/call")
 
 
-# ── (e) table append fast path ───────────────────────────────────────────────
-
-def bench_append_rows(wb_name: str, sheet_name: str, rows: int = 1000, reps: int = 5) -> None:
-    def _seed_table():
-        ws = _session.get_sheet(sheet_name, wb_name)
-        ws.Range("A1:B2").Value = [["A", "B"], [1, 2]]
-
-    _session.run_com(_seed_table)
-    table_action(
-        "create",
-        name="BenchAppend",
-        range="A1:B2",
-        sheet=sheet_name,
-        workbook=wb_name,
-    )
-    table_action(
-        "add_column",
-        name="BenchAppend",
-        workbook=wb_name,
-        column_name="Sum",
-        formula="=[@A]+[@B]",
-    )
-
-    payload = [[i, i * 2] for i in range(rows)]
-    samples = []
-    result = None
-    for _ in range(reps):
-        t0 = time.perf_counter()
-        result = table_action(
-            "append_rows",
-            name="BenchAppend",
-            workbook=wb_name,
-            values=payload,
-        )
-        samples.append(time.perf_counter() - t0)
-
-    assert result is not None
-    last = table_action(
-        "read",
-        name="BenchAppend",
-        workbook=wb_name,
-        offset=result["total_rows"] - 1,
-        limit=1,
-        value_mode="raw",
-    )
-    expected = [rows - 1, (rows - 1) * 2, (rows - 1) * 3]
-    assert last["values"] == [expected], (last, expected)
-
-    median_s = _median(samples)
-    _log(
-        f"(e) append_rows {rows} rows (median of {reps}): "
-        f"{median_s * 1000:.2f}ms wall-clock "
-        f"({rows / median_s:,.0f} rows/s), calculated column verified"
-    )
-
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     _log("=" * 60)
     _log("  ThepExcelMCP perf bench (Phase 0 — constant-factor round 2)")
     _log(f"  AUTOLAUNCH={os.environ.get('THEPEXCEL_MCP_AUTOLAUNCH', '0')}")
-    _log(
-        f"  EARLYBIND={os.environ.get('THEPEXCEL_MCP_EARLYBIND', '1')} "
-        "(bench forces each wrapper explicitly)"
-    )
+    _log(f"  EARLYBIND={os.environ.get('THEPEXCEL_MCP_EARLYBIND', '0')} (should be unset for this script)")
     _log("=" * 60)
 
     atexit.register(_instance_guard.teardown)
@@ -353,13 +284,11 @@ def main() -> None:
         _add_sheet(wb_name, "Bench2")
         _seed_block_data(wb_name, "Bench2", rows=10_000, cols=10)
         _add_sheet(wb_name, "Bench3")
-        _add_sheet(wb_name, "Bench4")
 
         bench_property_read(wb_name)
         bench_block_read(wb_name, "Bench2")
         bench_border_format(wb_name, "Bench3")
         bench_percall_floor()
-        bench_append_rows(wb_name, "Bench4")
 
         _log("=" * 60)
         _log("Bench complete.")

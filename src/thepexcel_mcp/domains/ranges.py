@@ -22,7 +22,6 @@ def range_action(
     offset: int = 0,
     limit: int = _DEFAULT_LIMIT,
     python_code: str | None = None,
-    value_mode: str = "typed",
 ) -> dict:
     """Dispatch a range action.
 
@@ -47,10 +46,6 @@ def range_action(
         a spill (not the anchor), the response includes ``spill_parent`` with
         the anchor cell address — this check is skipped for multi-cell reads,
         where "part of someone else's spill" isn't a meaningful answer.
-        ``value_mode="typed"`` (default) uses ``Range.Value`` so Excel dates
-        and currency keep their Python types. ``value_mode="raw"`` uses
-        ``Range.Value2`` for faster bulk reads and returns those values as
-        Excel serial numbers.
     read_spill
         Given an anchor cell address, returns the full spill range.
         If the cell has no spill (HasSpill is False), returns a clear error.
@@ -101,10 +96,6 @@ def range_action(
         raise ToolError("action='write' requires 'values' (2-D list).")
     if action == "write_formula" and not formula:
         raise ToolError("action='write_formula' requires 'formula' starting with '='.")
-    if value_mode not in ("typed", "raw"):
-        raise ToolError("value_mode must be 'typed' or 'raw'.")
-    if action not in ("read", "read_spill") and value_mode != "typed":
-        raise ToolError("value_mode='raw' is only valid for read/read_spill actions.")
     if action == "write_py":
         if not python_code:
             raise ToolError("action='write_py' requires 'python_code' (non-empty string).")
@@ -113,18 +104,7 @@ def range_action(
         raise ToolError(
             f"Unknown action '{action}'. Valid: read, read_spill, write, write_formula, write_py, clear."
         )
-    return _session.run_com(
-        _dispatch,
-        action,
-        range,
-        sheet,
-        workbook,
-        values,
-        formula,
-        offset,
-        limit,
-        value_mode,
-    )
+    return _session.run_com(_dispatch, action, range, sheet, workbook, values, formula, offset, limit)
 
 
 def _dispatch(
@@ -136,13 +116,12 @@ def _dispatch(
     formula: str | None,
     offset: int,
     limit: int,
-    value_mode: str,
 ) -> dict:
     """Executed on the COM worker thread."""
     if action == "read":
-        return _read(range_str, sheet, workbook, offset, limit, value_mode)
+        return _read(range_str, sheet, workbook, offset, limit)
     if action == "read_spill":
-        return _read_spill(range_str, sheet, workbook, offset, limit, value_mode)
+        return _read_spill(range_str, sheet, workbook, offset, limit)
     if action == "write":
         return _write(range_str, sheet, workbook, values)
     if action == "write_formula":
@@ -193,18 +172,12 @@ def _normalize_rows(raw) -> list:
     return rows
 
 
-def _read_values(rng, value_mode: str):
-    """Read a COM Range using typed ``Value`` or faster raw ``Value2``."""
-    return rng.Value2 if value_mode == "raw" else rng.Value
-
-
 def _read(
     range_str: str,
     sheet: str | None,
     workbook: str | None,
     offset: int,
     limit: int,
-    value_mode: str = "typed",
 ) -> dict:
     rng = _resolve_range(range_str, sheet, workbook)
     total_rows = rng.Rows.Count
@@ -213,7 +186,7 @@ def _read(
     # Legacy quirk (kept for byte-identical response shape): a truly-empty
     # single cell has Rows.Count==Columns.Count==1 but .Value is None — the
     # old whole-value read reported that as total_rows=0, not "1 empty row".
-    if total_rows == 1 and total_cols == 1 and _read_values(rng, value_mode) is None:
+    if total_rows == 1 and total_cols == 1 and rng.Value is None:
         return {"values": [], "total_rows": 0, "has_more": False, "next_offset": 0}
 
     if offset >= total_rows:
@@ -231,7 +204,7 @@ def _read(
             ws.Cells(r1 + offset, c1),
             ws.Cells(last_row, c1 + total_cols - 1),
         )
-        rows = _normalize_rows(_read_values(page_rng, value_mode))
+        rows = _normalize_rows(page_rng.Value)
 
     has_more = (offset + limit) < total_rows
     result = {
@@ -371,7 +344,6 @@ def _read_spill(
     workbook: str | None,
     offset: int,
     limit: int,
-    value_mode: str = "typed",
 ) -> dict:
     """Return the full spill range for a dynamic-array anchor cell.
 
@@ -398,7 +370,7 @@ def _read_spill(
 
     total_rows = spill_rng.Rows.Count
     total_cols = spill_rng.Columns.Count
-    if total_rows == 1 and total_cols == 1 and _read_values(spill_rng, value_mode) is None:
+    if total_rows == 1 and total_cols == 1 and spill_rng.Value is None:
         return {
             "anchor": anchor_cell.Address,
             "spill_range": spill_addr,
@@ -416,7 +388,7 @@ def _read_spill(
             ws.Cells(r1 + offset, c1),
             ws.Cells(last_row, c1 + total_cols - 1),
         )
-        rows = _normalize_rows(_read_values(page_rng, value_mode))
+        rows = _normalize_rows(page_rng.Value)
     has_more = (offset + limit) < total_rows
     return {
         "anchor": anchor_cell.Address,
