@@ -313,21 +313,22 @@ def _clear_gen_py_cache() -> None:
 
     Deleting the on-disk ``gen_py`` directory alone is insufficient: the
     broken generated module remains in ``sys.modules`` and the immediate
-    retry imports that same object again. Evict generated children, rebuild
-    the cache index, and invalidate import caches so recovery does not require
-    restarting the Python process.
+    retry imports that same object again. Evict generated children and
+    invalidate import caches so recovery does not require restarting the
+    Python process.
+
+    Deliberately does NOT call ``gencache.Rebuild()``: that regenerates the
+    makepy cache for EVERY registered typelib on the machine, not just the one
+    this process broke — a machine-wide side effect taken on a recovery path,
+    and the suspected trigger of the 2026-08-04 live-COM incident. Dispatch
+    regenerates the exact typelib lazily on next use, so the eviction above is
+    the whole cure.
     """
     shutil.rmtree(win32com.__gen_path__, ignore_errors=True)
     for module_name in list(sys.modules):
         if module_name.startswith("win32com.gen_py."):
             sys.modules.pop(module_name, None)
     importlib.invalidate_caches()
-    try:
-        win32com.client.gencache.Rebuild()
-    except Exception:
-        # Dispatch can regenerate the exact typelib lazily. The critical step
-        # is evicting the corrupt in-memory generated module above.
-        pass
 
 
 def _enum_rot_workbooks(name: str):

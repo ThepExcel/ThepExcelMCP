@@ -283,7 +283,16 @@ class TestMaybeEarlybind:
         assert _maybe_earlybind(app) is app
 
 
-def test_clear_gen_py_cache_evicts_generated_modules_and_rebuilds(monkeypatch):
+def test_clear_gen_py_cache_evicts_generated_modules_without_machine_wide_rebuild(
+    monkeypatch,
+):
+    """Eviction is the cure; gencache.Rebuild() must NOT be called.
+
+    Rebuild() regenerates every registered typelib on the machine — a
+    machine-wide side effect on a recovery path, and the suspected trigger of
+    the 2026-08-04 live-COM incident. Dispatch regenerates the one typelib
+    this process needs lazily.
+    """
     fake_module = "win32com.gen_py.fake_excel_typelib"
     monkeypatch.setitem(session_mod.sys.modules, fake_module, object())
     remove_tree = MagicMock()
@@ -298,7 +307,7 @@ def test_clear_gen_py_cache_evicts_generated_modules_and_rebuilds(monkeypatch):
     remove_tree.assert_called_once_with(session_mod.win32com.__gen_path__, ignore_errors=True)
     assert fake_module not in session_mod.sys.modules
     invalidate.assert_called_once()
-    rebuild.assert_called_once()
+    rebuild.assert_not_called()
 
 
 # ── run_com slow-call diagnostic ──────────────────────────────────────────────
