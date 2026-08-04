@@ -10,8 +10,6 @@ on entry via _hex_to_bgr().  The conversion is transparent to callers.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-
 from fastmcp.exceptions import ToolError
 
 from ..session import ExcelSession, bulk_guard, excel_guard

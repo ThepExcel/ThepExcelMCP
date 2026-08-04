@@ -14,7 +14,7 @@ and screenshots so the AI can *see* what it built.
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)](#platform-support)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/unit_tests-1016-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/unit_tests-1000%2B-brightgreen)](tests/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-server-8A2BE2)](https://modelcontextprotocol.io)
 
 [Quick start](#quick-start--hand-it-to-your-ai-agent) ·
@@ -104,7 +104,7 @@ example-rich docstrings that serve as the LLM-facing API.
 
 | Area | Tools | What the agent can do |
 |---|---|---|
-| **Workbooks, sheets & data I/O** | `excel_workbook` · `excel_sheet` · `excel_range` · `excel_table` | Open/create/save workbooks, manage sheets, read/write ranges (paginated, spill-aware, `Formula2` dynamic arrays, experimental `=PY()`), full Excel Table (ListObject) lifecycle: sort, filter, styles, totals, structured references |
+| **Workbooks, sheets & data I/O** | `excel_workbook` · `excel_sheet` · `excel_range` · `excel_table` | Open/create/save workbooks, manage sheets, read/write ranges (paginated, spill-aware, typed or faster raw `Value2` reads, `Formula2` dynamic arrays, experimental `=PY()`), full Excel Table (ListObject) lifecycle including bulk append, sort, filter, styles, totals, and structured references |
 | **Power Query & Data Model** | `excel_powerquery` · `excel_datamodel` · `excel_name` | Create/edit/refresh M queries with a built-in M static analyzer, query parameters, load to Table or Data Model; model tables, relationships, DAX measures; CUBE formula helpers; named ranges & LAMBDA functions |
 | **PivotTables** | `excel_pivot` · `excel_slicer` | Create pivots from a range, Table, or the Data Model; add/move/remove fields with real aggregations; layouts & subtotals; slicers and date timelines |
 | **Charts & visual verification** | `excel_chart` · `excel_screenshot` · `excel_shape` · `excel_sparkline` | Create/configure charts (incl. true PivotCharts), export chart PNGs; capture any range/sheet/chart as PNG so the agent can *see* its work; images, text boxes, AutoShapes; in-cell sparklines |
@@ -118,10 +118,10 @@ example-rich docstrings that serve as the LLM-facing API.
 |---|---|
 | `excel_workbook` | `list`, `info`, `open`, `save`, `close`, `create`, `save_as` |
 | `excel_sheet` | `list`, `add`, `rename`, `delete` |
-| `excel_range` | `read` (paginated, spill metadata), `read_spill`, `write`, `write_formula` (Formula2 / dynamic arrays), `write_py` (`=PY()`, experimental), `clear` |
-| `excel_table` | `list`, `create`, `read` (paginated), `append_rows`, `add_column` (with formula), `sort`, `filter`, `set_style`, `toggle_totals`, `rename`, `delete` |
+| `excel_range` | `read` (paginated, spill metadata, `value_mode=typed\|raw`), `read_spill`, `write`, `write_formula` (Formula2 / dynamic arrays), `write_py` (`=PY()`, experimental), `clear` |
+| `excel_table` | `list`, `create`, `read` (paginated, `value_mode=typed\|raw`), `append_rows` (single-resize fast path with safe insertion fallback), `add_column` (with formula), `sort`, `filter`, `set_style`, `toggle_totals`, `rename`, `delete` |
 | `excel_powerquery` | `list`, `get`, `create`, `update`, `delete`, `refresh`, `refresh_all`, `load_to_table`, `load_to_datamodel`, `analyze`, `analyze_raw`, `create_parameter`, `get_parameter`, `set_parameter`, `list_parameters` |
-| `excel_pivot` | `list`, `create` (range/table/datamodel source), `add_field` (aggregation + number format), `remove_field`, `move_field`, `set_layout`, `refresh`, `delete`, `read` (paginated) |
+| `excel_pivot` | `list`, `create` (range/table/datamodel source), `add_field` (aggregation + number format), `remove_field`, `move_field`, `set_layout`, `refresh`, `delete`, `read` (paginated, `value_mode=typed\|raw`) |
 | `excel_datamodel` | `info`, `list_tables`, `add_table`, `list_relationships`, `add_relationship`, `delete_relationship`, `list_measures`, `add_measure` (DAX), `update_measure`, `delete_measure`, `refresh`, `cube_value`, `cube_member`, `cube_formula` |
 | `excel_name` | `list`, `get`, `set`, `delete` (named ranges, constants, LAMBDA — with `is_lambda` flag) |
 | `excel_chart` | `list`, `create`, `configure`, `set_source`, `export_image` (PNG), `delete` |
@@ -265,7 +265,8 @@ Windows under the hood — offered as guidance, not a separately tested install 
 | `THEPEXCEL_MCP_AUTOLAUNCH` | `1` (on) | Auto-launch a visible Excel (+ blank workbook) if none is running. Set `0`/`false`/`no`/`off` to require Excel be opened manually. |
 | `THEPEXCEL_MCP_ENABLE_VBA` | unset (off) | Set `1` to enable the `excel_vba` tool. Off by default for security. |
 | `THEPEXCEL_MCP_COM_TIMEOUT` | `120` | Per-call COM timeout in seconds. Increase for slow data refreshes. |
-| `THEPEXCEL_MCP_EARLYBIND` | `1` (on) — perf default | Early-bind the Excel COM Application for faster property access (~1.25x on property-heavy loops). Set `0`/`false`/`no`/`off` to force late binding (kill-switch) if you hit a binding-related issue. |
+| `THEPEXCEL_MCP_EARLYBIND` | `1` (on) — perf default | Early-bind the already-attached Excel COM Application. Corrected wrapper-forced benchmarks showed modest gains (9% faster property reads in the latest run). Set `0`/`false`/`no`/`off` to force a truly dynamic wrapper. |
+| `THEPEXCEL_MCP_TOOL_DISCOVERY` | `full` | Set `bm25` to expose only orientation/read tools plus `search_tools`/`call_tool`; the full 26-tool API remains callable and the initial catalog is about 94% smaller. |
 
 ## Platform support
 
@@ -347,10 +348,12 @@ Then invoke it with `/excel-god` in a Claude Code session.
 ## Development
 
 ```powershell
-uv sync                                                       # install dependencies
-uv run pytest -q                                              # 1016 unit tests — mocked COM, no Excel needed
+uv sync --frozen                                              # install exactly the locked dependencies
+uv run pytest -q                                              # 1000+ unit tests — mocked COM, no Excel needed
+uv run ruff check src scripts --select E9,F                  # syntax/import/static checks
 uv run python tests/smoke_com.py                              # live COM smoke suite (Windows + Excel)
 uv run python tests/smoke_com.py --sections 1,2,3,4           # subset (sections 1–28)
+uv run --isolated --with mcp==2.0.0 python tests/protocol_smoke_v2.py  # real stdio handshake
 uv run python scripts/build_mcpb.py                           # build dist/thepexcel-mcp.mcpb
 ```
 
@@ -365,7 +368,7 @@ src/thepexcel_mcp/
 ├── session.py         # ExcelSession — STA COM worker thread, run_com(), ROT fallback, guards
 ├── domains/           # one module per tool (workbook, ranges, powerquery, pivots, datamodel, …)
 └── analysis/          # M-code static analyzer used by excel_powerquery
-tests/                 # 1016 unit tests (mocked COM) + smoke_com.py (live)
+tests/                 # 1000+ unit tests (mocked COM) + protocol/live Excel smoke suites
 skills/excel-god/      # bundled agent skill
 scripts/build_mcpb.py  # MCPB bundle builder for Claude Desktop
 ```

@@ -251,7 +251,7 @@ def powerquery_action(
     if action == "create_parameter":
         _require(name, "name", action)
         if value is None:
-            raise ToolError(f"action='create_parameter' requires 'value'.")
+            raise ToolError("action='create_parameter' requires 'value'.")
         return _session.run_com(_create_parameter, name, value, param_type, required, workbook)
     if action == "get_parameter":
         _require(name, "name", action)
@@ -259,7 +259,7 @@ def powerquery_action(
     if action == "set_parameter":
         _require(name, "name", action)
         if value is None:
-            raise ToolError(f"action='set_parameter' requires 'value'.")
+            raise ToolError("action='set_parameter' requires 'value'.")
         return _session.run_com(_set_parameter, name, value, param_type, workbook)
     if action == "list_parameters":
         return _session.run_com(_list_parameters, workbook)

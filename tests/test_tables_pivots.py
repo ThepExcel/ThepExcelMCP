@@ -519,6 +519,26 @@ class TestTableReadPageScoped:
         assert result["columns"] == ["C", "A"]
         assert result["values"] == [[3, 1], [6, 4]]
 
+    def test_raw_mode_reads_value2(self):
+        from thepexcel_mcp.domains.tables import _read
+
+        lo, dbr, ws = self._make_lo(["A"], total_rows=2)
+        page_rng = MagicMock()
+        page_rng.Value = (("typed",), ("typed",))
+        page_rng.Value2 = ((1.25,), (2.5,))
+        ws.Range.return_value = page_rng
+
+        mock_session = make_mock_session()
+        mock_session.get_workbook.return_value = MagicMock()
+        from unittest.mock import patch
+        with patch("thepexcel_mcp.domains.tables._session", mock_session):
+            with patch("thepexcel_mcp.domains.tables._find_table", return_value=lo):
+                result = _read(
+                    "T1", None, None, offset=0, limit=100, value_mode="raw"
+                )
+
+        assert result["values"] == [[1.25], [2.5]]
+
     def test_no_data_body_range_returns_empty(self):
         from thepexcel_mcp.domains.tables import _read
 
@@ -535,6 +555,36 @@ class TestTableReadPageScoped:
             "columns": ["A"], "values": [], "total_rows": 0,
             "has_more": False, "next_offset": None,
         }
+
+
+class TestPivotReadValueMode:
+    def test_raw_mode_reads_value2(self):
+        from thepexcel_mcp.domains.pivots import _read
+
+        rng = MagicMock()
+        rng.Rows.Count = 2
+        rng.Columns.Count = 1
+        rng.Row = 1
+        rng.Column = 1
+        ws = MagicMock()
+        rng.Parent = ws
+        page_rng = MagicMock()
+        page_rng.Value = (("typed",), ("typed",))
+        page_rng.Value2 = ((10.5,), (20.5,))
+        ws.Range.return_value = page_rng
+        pt = MagicMock()
+        pt.TableRange1 = rng
+
+        mock_session = make_mock_session()
+        mock_session.get_workbook.return_value = MagicMock()
+        from unittest.mock import patch
+        with patch("thepexcel_mcp.domains.pivots._session", mock_session):
+            with patch("thepexcel_mcp.domains.pivots._find_pivot", return_value=pt):
+                result = _read(
+                    "P1", None, offset=0, limit=100, value_mode="raw"
+                )
+
+        assert result["values"] == [[10.5], [20.5]]
 
 
 # ── tables._append_rows: single block write ─────────────────────────────────────
@@ -558,6 +608,7 @@ class TestAppendRowsBlockWrite:
         # block geometry) and once after (for the final row-count verify).
         # Simulate ListRows.Add() growing the row count between reads.
         state = {"count": existing_rows}
+        lo._row_state = state
 
         def add_row():
             state["count"] += 1
@@ -577,7 +628,7 @@ class TestAppendRowsBlockWrite:
         lo.Parent.Application = wb_app
         return lo, ws, wb_app
 
-    def _call(self, lo, values, wb_app):
+    def _call(self, lo, values, wb_app, resize_side_effect=None):
         wb = MagicMock()
         wb.Application = wb_app
         mock_session = make_mock_session()
@@ -585,16 +636,39 @@ class TestAppendRowsBlockWrite:
         from unittest.mock import patch
         with patch("thepexcel_mcp.domains.tables._session", mock_session):
             with patch("thepexcel_mcp.domains.tables._find_table", return_value=lo):
-                from thepexcel_mcp.domains.tables import _append_rows
-                return _append_rows("T1", None, values)
+                with patch("thepexcel_mcp.domains.tables._try_resize_for_append") as resize:
+                    if resize_side_effect is None:
+                        resize.return_value = False
+                    else:
+                        resize.side_effect = resize_side_effect
+                    from thepexcel_mcp.domains.tables import _append_rows
+                    return _append_rows("T1", None, values)
 
-    def test_adds_a_listrow_per_value_row(self):
+    def test_occupied_fallback_adds_a_listrow_per_value_row(self):
         lo, ws, wb_app = self._make_lo(n_cols=2, existing_rows=0)
         result = self._call(lo, [[1, 2], [3, 4], [5, 6]], wb_app)
 
         assert lo.ListRows.Add.call_count == 3
         assert result["appended_rows"] == 3
         assert result["total_rows"] == 3
+
+    def test_resize_fast_path_skips_per_row_com_calls(self):
+        lo, ws, wb_app = self._make_lo(n_cols=2, existing_rows=2)
+
+        def resize_effect(_lo, rows_to_add):
+            _lo._row_state["count"] += rows_to_add
+            return True
+
+        result = self._call(
+            lo,
+            [[1, 2], [3, 4], [5, 6]],
+            wb_app,
+            resize_side_effect=resize_effect,
+        )
+
+        lo.ListRows.Add.assert_not_called()
+        assert result["appended_rows"] == 3
+        assert result["total_rows"] == 5
 
     def test_single_block_value_write_not_per_cell(self):
         """The new rows' data must be written via ONE block .Value assignment,
@@ -640,6 +714,49 @@ class TestAppendRowsBlockWrite:
             self._call(lo, [[1, 2]], wb_app)
 
         bg.assert_called_once_with(wb_app)
+
+
+class TestTryResizeForAppend:
+    def _make(self, count_a=0):
+        from thepexcel_mcp.domains.tables import _try_resize_for_append
+
+        lo = MagicMock()
+        ws = MagicMock()
+        lo.Range.Parent = ws
+        lo.Range.Row = 1
+        lo.Range.Column = 1
+        lo.Range.Rows.Count = 3
+        lo.Range.Columns.Count = 2
+        lo.Parent.Application.WorksheetFunction.CountA.return_value = count_a
+        ws.Cells.side_effect = lambda row, col: (row, col)
+        expansion = MagicMock(name="expansion")
+        expanded = MagicMock(name="expanded")
+        ws.Range.side_effect = [expansion, expanded]
+        return _try_resize_for_append, lo, ws, expansion, expanded
+
+    def test_empty_expansion_band_resizes_once(self):
+        helper, lo, ws, expansion, expanded = self._make(count_a=0)
+
+        assert helper(lo, 1000) is True
+
+        lo.Parent.Application.WorksheetFunction.CountA.assert_called_once_with(
+            expansion
+        )
+        lo.Resize.assert_called_once_with(expanded)
+        ws.Cells.assert_any_call(4, 1)
+        ws.Cells.assert_any_call(1003, 2)
+
+    def test_occupied_expansion_band_uses_fallback(self):
+        helper, lo, ws, expansion, expanded = self._make(count_a=1)
+
+        assert helper(lo, 5) is False
+        lo.Resize.assert_not_called()
+
+    def test_resize_error_uses_fallback(self):
+        helper, lo, ws, expansion, expanded = self._make(count_a=0)
+        lo.Resize.side_effect = Exception("cannot resize")
+
+        assert helper(lo, 5) is False
 
 
 # ── _find_table fast path ────────────────────────────────────────────────────────

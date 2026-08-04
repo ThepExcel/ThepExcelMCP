@@ -44,17 +44,21 @@ def _should_include(rel: pathlib.Path) -> bool:
 
 
 def build() -> None:
+    missing = [name for name in ROOT_INCLUDES if not (REPO / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Cannot build a reproducible MCPB; required root files are missing: "
+            + ", ".join(missing)
+        )
+
     DIST.mkdir(exist_ok=True)
 
     with zipfile.ZipFile(OUT, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         # Root-level files
         for name in ROOT_INCLUDES:
             path = REPO / name
-            if path.exists():
-                zf.write(path, arcname=name)
-                print(f"  + {name}")
-            else:
-                print(f"  ! MISSING: {name}", file=sys.stderr)
+            zf.write(path, arcname=name)
+            print(f"  + {name}")
 
         # Source tree
         for src_dir_name in SRC_DIRS:

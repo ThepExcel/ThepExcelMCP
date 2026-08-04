@@ -33,7 +33,17 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen
+
+      - name: Static checks
+        run: |
+          uv run ruff check src scripts --select E9,F
 
       - name: Run unit tests
         run: uv run pytest -q
+
+      - name: MCP v2 protocol handshake
+        run: uv run --isolated --with mcp==2.0.0 python tests/protocol_smoke_v2.py
+
+      - name: Build reproducible MCPB
+        run: uv run python scripts/build_mcpb.py
