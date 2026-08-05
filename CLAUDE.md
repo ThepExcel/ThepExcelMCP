@@ -182,6 +182,10 @@ claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMC
 - Auto-launch is **ON by default** (`get_app()` opens a visible Excel + a blank workbook if none is running); opt out with a falsy `THEPEXCEL_MCP_AUTOLAUNCH` (`0`/`false`/`no`/`off`). `get_app()` also self-heals a corrupt win32com `gen_py` cache (a stale cache throws `AttributeError: ... 'CLSIDToClassMap'` on Dispatch/GetActiveObject and masquerades as "Excel not running" — cleared + retried once).
 - All COM errors are caught and re-raised as `fastmcp.exceptions.ToolError` with actionable messages.
 - VBA tool opt-in: `THEPEXCEL_MCP_ENABLE_VBA=1` + Excel's AccessVBOM trust setting.
+- Progressive tool discovery opt-in: `THEPEXCEL_MCP_TOOL_DISCOVERY=bm25` hides the 26-tool
+  catalog behind `search_tools`/`call_tool` (only `excel_workbook` + `excel_range` stay visible);
+  default `full` keeps the whole catalog. Cross-version startup oracle:
+  `uv run --isolated --with mcp==2.0.0 python tests/protocol_smoke_v2.py` (checks both modes).
 - **Public repo — synthetic data only (HARDLINE).** This repository is public. `samples/`, tests, docstrings, and doc examples must use **synthetic / anonymized data**: never commit a real customer or company name, real product catalog or model codes, client sales figures, or any third-party business data. Sample datasets must be generic ("Alpha/Beta", "Widget/Gadget", "North/South"). Likewise, keep **internal working notes out of committed docs** — inbox/handoff/memory/vault references and other private-tooling vocabulary belong in private systems, not in files that ship.
 
 ## Future phases
