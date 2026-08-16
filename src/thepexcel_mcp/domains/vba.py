@@ -53,8 +53,11 @@ _VBEXT_CT_STD_MODULE = 1  # only type that can be freely created/deleted
 
 
 def _env_gate() -> None:
-    """Raise ToolError if THEPEXCEL_MCP_ENABLE_VBA is not set to '1'."""
-    if os.environ.get("THEPEXCEL_MCP_ENABLE_VBA") != "1":
+    """Raise ToolError unless THEPEXCEL_MCP_ENABLE_VBA is truthy ('1'/'true'/'yes'/'on').
+
+    Accepts 'true' as well as '1' because the MCPB desktop-extension manifest passes a
+    boolean user_config through as the literal string "true"."""
+    if os.environ.get("THEPEXCEL_MCP_ENABLE_VBA", "").strip().lower() not in ("1", "true", "yes", "on"):
         raise ToolError(
             "VBA tool disabled. Set THEPEXCEL_MCP_ENABLE_VBA=1 to enable. "
             "Example: set THEPEXCEL_MCP_ENABLE_VBA=1 in your environment, "
