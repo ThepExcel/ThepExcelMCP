@@ -190,14 +190,40 @@ claude mcp add thepexcel-excel --scope user `
 
 ### Register with Claude Desktop
 
-**Option A — MCPB bundle (one file, drag-and-drop):**
+**Option A — MCPB bundle (one file, drag-and-drop). Recommended for Claude Desktop, and it is
+the path that reaches the Cowork tab too.**
 
-```powershell
-uv run python scripts/build_mcpb.py
-```
+1. Build the bundle (still needs `uv` on this machine — the bundle launches the server through
+   `uv run`, it does not vendor Python):
 
-This produces `dist/thepexcel-mcp.mcpb` — open it with Claude Desktop (Settings → Extensions) to
-install the server as a desktop extension.
+   ```powershell
+   uv run python scripts/build_mcpb.py
+   ```
+
+   This produces `dist/thepexcel-mcp.mcpb` (~225 KB: `manifest.json`, `pyproject.toml`,
+   `uv.lock`, `src/`).
+
+2. In Claude Desktop open **Settings → Desktop app → Extensions**, then either drag
+   `thepexcel-mcp.mcpb` onto the *"Drag .MCPB or .DXT files here to install"* area or use
+   **Advanced settings → Install extension** and pick the file. The preview shows the manifest;
+   click **Install**.
+
+3. **Configure** (button next to *ThepExcel Excel MCP* under *Installed on your computer*):
+   *Auto-launch Excel* (default on) and *Enable VBA tool* (default off — needs the VBA project
+   object model trust setting in Excel). These map to `THEPEXCEL_MCP_AUTOLAUNCH` /
+   `THEPEXCEL_MCP_ENABLE_VBA`.
+
+4. Start a new chat. The `excel_*` tools appear in the tool list; the first call launches Excel on
+   your machine.
+
+Verified 2026-08-16 on Windows 11 / Claude Desktop with the Cowork tab: install succeeds and the
+extension shows under *Installed on your computer*.
+
+> **"Failed to preview extension: Invalid manifest: server: Required; user_config: Required"** —
+> you have a bundle built before 2026-08-16. Older `manifest.json` used `server.type: "uv"`, which
+> the current MCPB schema does not accept (allowed: `python` / `node` / `binary` plus an explicit
+> `mcp_config`). Pull, rebuild with `scripts/build_mcpb.py`, and install the new file. You can
+> check any bundle's manifest with `npx @anthropic-ai/mcpb validate manifest.json`.
 
 **Option B — manual config.** Edit `%APPDATA%\Claude\claude_desktop_config.json`:
 
