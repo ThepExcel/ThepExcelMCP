@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "thepexcel-excel",
   "display_name": "ThepExcel Excel MCP",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Full Excel control via COM — Power Query, PivotTables, Data Model/DAX, VBA, dynamic arrays, charts, screenshots. Windows only.",
   "author": {
     "name": "ThepExcel",

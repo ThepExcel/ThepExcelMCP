@@ -12,6 +12,7 @@ state, not just "no exception raised".
 
 from __future__ import annotations
 
+import os
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -295,7 +296,7 @@ class TestRestore:
 
         # VERIFY EFFECT: Workbooks.Open called with the registered path
         app.Workbooks.Open.assert_called_once_with(
-            "C:/tmp/Sales__snap_1_Sales.xlsx"
+            os.path.normpath("C:/tmp/Sales__snap_1_Sales.xlsx")
         )
         assert result["restored_from"] == "snap_1_Sales"
         assert result["opened_workbook"] == "Sales__snap_1_Sales.xlsx"

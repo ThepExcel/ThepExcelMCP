@@ -150,7 +150,7 @@ def _snapshot(workbook: str | None) -> dict:
             # SaveCopyAs streams a copy to disk WITHOUT touching the open
             # workbook's Saved flag, Name, or path — the user's live file is
             # never rebound or modified.
-            wb.SaveCopyAs(path)
+            wb.SaveCopyAs(os.path.normpath(path))
     except Exception as e:
         raise _session.wrap(e, f"snapshot: SaveCopyAs to '{path}' failed")
 
@@ -221,7 +221,7 @@ def _restore(snapshot_id: str) -> dict:
     app = _session.get_app()
     try:
         with excel_guard(app):
-            opened = app.Workbooks.Open(path)
+            opened = app.Workbooks.Open(os.path.normpath(path))
     except Exception as e:
         raise _session.wrap(e, f"restore: Workbooks.Open('{path}') failed")
 

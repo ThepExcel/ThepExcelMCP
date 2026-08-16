@@ -5,6 +5,7 @@ No Excel required — all COM calls are intercepted via make_mock_session.
 
 from __future__ import annotations
 
+import os
 import pytest
 from unittest.mock import MagicMock, patch, call
 
@@ -409,7 +410,7 @@ class TestWorkbookCreate:
                 eg.return_value.__exit__ = MagicMock(return_value=False)
                 result = workbook_action("create", path="C:/data/New.xlsx")
 
-        mock_wb.SaveAs.assert_called_once_with("C:/data/New.xlsx", FileFormat=51)
+        mock_wb.SaveAs.assert_called_once_with(os.path.normpath("C:/data/New.xlsx"), FileFormat=51)
         assert result["created"] == "New.xlsx"
 
     def test_create_missing_path_save_as_raises(self):
@@ -437,7 +438,7 @@ class TestWorkbookSaveAs:
                 eg.return_value.__exit__ = MagicMock(return_value=False)
                 result = workbook_action("save_as", path="C:/out/Sales.xlsx")
 
-        mock_wb.SaveAs.assert_called_once_with("C:/out/Sales.xlsx", FileFormat=51)
+        mock_wb.SaveAs.assert_called_once_with(os.path.normpath("C:/out/Sales.xlsx"), FileFormat=51)
         assert result["saved_as"] == "Sales.xlsx"
 
     def test_save_as_xlsm(self):
@@ -457,7 +458,7 @@ class TestWorkbookSaveAs:
                 eg.return_value.__exit__ = MagicMock(return_value=False)
                 workbook_action("save_as", path="C:/out/Macros.xlsm")
 
-        mock_wb.SaveAs.assert_called_once_with("C:/out/Macros.xlsm", FileFormat=52)
+        mock_wb.SaveAs.assert_called_once_with(os.path.normpath("C:/out/Macros.xlsm"), FileFormat=52)
 
     def test_save_as_csv(self):
         """save_as to .csv uses FileFormat=6."""
@@ -476,7 +477,7 @@ class TestWorkbookSaveAs:
                 eg.return_value.__exit__ = MagicMock(return_value=False)
                 workbook_action("save_as", path="C:/out/Export.csv")
 
-        mock_wb.SaveAs.assert_called_once_with("C:/out/Export.csv", FileFormat=6)
+        mock_wb.SaveAs.assert_called_once_with(os.path.normpath("C:/out/Export.csv"), FileFormat=6)
 
     def test_save_as_unknown_extension_raises(self):
         """save_as with unknown extension raises ToolError."""

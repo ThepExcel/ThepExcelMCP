@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastmcp.exceptions import ToolError
 
 from ..session import ExcelSession, excel_guard
@@ -105,7 +107,7 @@ def _info(workbook: str | None) -> dict:
 def _open(path: str) -> dict:
     app = _session.get_app()
     try:
-        wb = app.Workbooks.Open(path)
+        wb = app.Workbooks.Open(_winpath(path))
         return {"opened": wb.Name, "path": wb.FullName}
     except Exception as e:
         raise _session.wrap(e, f"Cannot open '{path}'")
@@ -158,6 +160,17 @@ def _infer_file_format(path: str) -> int:
     return fmt
 
 
+def _winpath(path: str) -> str:
+    """Normalise a user-supplied path for the Excel COM API.
+
+    Excel's ``Workbooks.Open`` / ``SaveAs`` mis-handle forward slashes: a path like
+    ``D:/Cowork-Demo/x.xlsx`` came back as ``Microsoft Excel cannot access the file
+    'D:\//Cowork-Demo/AC218400'`` (seen 2026-08-16 from a Cowork session, which
+    writes POSIX-style paths by habit). ``os.path.normpath`` turns every ``/`` into ``\``
+    on Windows and collapses ``..``; it leaves already-correct paths untouched."""
+    return os.path.normpath(path)
+
+
 def _create(path: str | None) -> dict:
     """Create a new blank workbook. If path is given, SaveAs immediately."""
     app = _session.get_app()
@@ -167,7 +180,7 @@ def _create(path: str | None) -> dict:
             name = wb.Name
             if path:
                 fmt = _infer_file_format(path)
-                wb.SaveAs(path, FileFormat=fmt)
+                wb.SaveAs(_winpath(path), FileFormat=fmt)
                 name = wb.Name
         return {"created": name, "path": wb.FullName if path else None}
     except ToolError:
@@ -182,7 +195,7 @@ def _save_as(workbook: str | None, path: str) -> dict:
     fmt = _infer_file_format(path)
     try:
         with excel_guard(wb.Application):
-            wb.SaveAs(path, FileFormat=fmt)
+            wb.SaveAs(_winpath(path), FileFormat=fmt)
         return {"saved_as": wb.Name, "path": wb.FullName}
     except ToolError:
         raise
