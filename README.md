@@ -193,8 +193,10 @@ claude mcp add thepexcel-excel --scope user `
 **Option A — MCPB bundle (one file, drag-and-drop). Recommended for Claude Desktop, and it is
 the path that reaches the Cowork tab too.**
 
-1. Build the bundle (still needs `uv` on this machine — the bundle launches the server through
-   `uv run`, it does not vendor Python):
+1. Get the bundle. **Download `thepexcel-mcp.mcpb` from the
+   [latest release](https://github.com/ThepExcel/ThepExcelMCP/releases/latest)** — no clone, no
+   build. (You still need `uv` on this machine — the bundle launches the server through `uv run`,
+   it does not vendor Python.) To build it yourself from a clone instead:
 
    ```powershell
    uv run python scripts/build_mcpb.py
