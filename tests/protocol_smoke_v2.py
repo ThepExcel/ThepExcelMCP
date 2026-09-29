@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -23,8 +24,10 @@ from mcp.client.stdio import stdio_client
 REPO = Path(__file__).resolve().parents[1]
 # Same launch line the README documents: python -m, not the uv-generated
 # thepexcel-mcp.exe shim (unsigned, blocked by Smart App Control).
+# `--directory <dir>` points it at another checkout, e.g. an unzipped .mcpb.
+SERVER_DIR = Path(sys.argv[sys.argv.index("--directory") + 1]) if "--directory" in sys.argv else REPO
 SERVER_CMD = "uv"
-SERVER_ARGS = ["run", "--directory", str(REPO), "python", "-m", "thepexcel_mcp.server"]
+SERVER_ARGS = ["run", "--directory", str(SERVER_DIR), "python", "-m", "thepexcel_mcp.server"]
 
 
 async def _list_tools(discovery: str) -> tuple[list, str]:
@@ -54,8 +57,8 @@ async def _list_tools(discovery: str) -> tuple[list, str]:
 
 
 async def main() -> None:
-    if not (REPO / ".venv").exists():
-        raise SystemExit(f"Project venv missing under {REPO}; run uv sync first")
+    if not (SERVER_DIR / "pyproject.toml").exists():
+        raise SystemExit(f"No pyproject.toml under {SERVER_DIR}")
 
     full_tools, full_protocol = await _list_tools("full")
     full_names = {tool.name for tool in full_tools}
