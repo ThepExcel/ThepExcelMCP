@@ -18,7 +18,9 @@
         "run",
         "--directory",
         "${__dirname}",
-        "thepexcel-mcp"
+        "python",
+        "-m",
+        "thepexcel_mcp.server"
       ],
       "env": {
         "THEPEXCEL_MCP_AUTOLAUNCH": "${user_config.autolaunch}",

@@ -21,13 +21,19 @@ from mcp.client.stdio import stdio_client
 
 
 REPO = Path(__file__).resolve().parents[1]
-SERVER_EXE = REPO / ".venv" / "Scripts" / "thepexcel-mcp.exe"
+# Same launch line the README documents: python -m, not the uv-generated
+# thepexcel-mcp.exe shim (unsigned, blocked by Smart App Control).
+SERVER_CMD = "uv"
+SERVER_ARGS = ["run", "--directory", str(REPO), "python", "-m", "thepexcel_mcp.server"]
 
 
 async def _list_tools(discovery: str) -> tuple[list, str]:
     env = os.environ.copy()
     env["THEPEXCEL_MCP_TOOL_DISCOVERY"] = discovery
-    params = StdioServerParameters(command=str(SERVER_EXE), args=[], env=env)
+    # The outer `uv run --isolated` exports VIRTUAL_ENV; drop it so the inner
+    # `uv run --directory` resolves the project's own .venv.
+    env.pop("VIRTUAL_ENV", None)
+    params = StdioServerParameters(command=SERVER_CMD, args=SERVER_ARGS, env=env)
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errlog:
         async with Client(
             stdio_client(params, errlog=errlog),
@@ -48,8 +54,8 @@ async def _list_tools(discovery: str) -> tuple[list, str]:
 
 
 async def main() -> None:
-    if not SERVER_EXE.exists():
-        raise SystemExit(f"Server executable missing: {SERVER_EXE}; run uv sync first")
+    if not (REPO / ".venv").exists():
+        raise SystemExit(f"Project venv missing under {REPO}; run uv sync first")
 
     full_tools, full_protocol = await _list_tools("full")
     full_names = {tool.name for tool in full_tools}

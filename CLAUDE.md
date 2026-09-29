@@ -77,7 +77,7 @@ THEPEXCEL_MCP_AUTOLAUNCH=1 uv run python tests/bench_com.py     # live perf benc
 uv run --isolated --with mcp==2.0.0 python tests/protocol_smoke_v2.py  # real stdio handshake
 uv run thepexcel-mcp                                            # run stdio server
 uv run python scripts/build_mcpb.py                             # build dist/thepexcel-mcp.mcpb
-claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMCP thepexcel-mcp  # register
+claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMCP python -m thepexcel_mcp.server  # register
 ```
 
 ## Constraints

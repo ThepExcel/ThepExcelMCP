@@ -175,7 +175,7 @@ No pip or manual virtualenv setup required.
 ### Register with Claude Code (CLI)
 
 ```powershell
-claude mcp add thepexcel-excel --scope user -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
+claude mcp add thepexcel-excel --scope user -- uv run --directory C:\path\to\ThepExcelMCP python -m thepexcel_mcp.server
 ```
 
 Substitute `C:\path\to\ThepExcelMCP` with your own clone path. Verify with `claude mcp list`.
@@ -185,7 +185,7 @@ To enable VBA as well:
 ```powershell
 claude mcp add thepexcel-excel --scope user `
   -e THEPEXCEL_MCP_ENABLE_VBA=1 `
-  -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
+  -- uv run --directory C:\path\to\ThepExcelMCP python -m thepexcel_mcp.server
 ```
 
 ### Register with Claude Desktop
@@ -234,7 +234,7 @@ extension shows under *Installed on your computer*.
   "mcpServers": {
     "thepexcel-excel": {
       "command": "uv",
-      "args": ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"]
+      "args": ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "python", "-m", "thepexcel_mcp.server"]
     }
   }
 }
@@ -249,7 +249,7 @@ Codex talks MCP over the same stdio transport. `codex mcp add` writes to your **
 config (`~/.codex/config.toml`):
 
 ```powershell
-codex mcp add thepexcel-excel -- uv run --directory C:\path\to\ThepExcelMCP thepexcel-mcp
+codex mcp add thepexcel-excel -- uv run --directory C:\path\to\ThepExcelMCP python -m thepexcel_mcp.server
 ```
 
 Verify: `codex mcp list` / `codex mcp get thepexcel-excel`. Equivalent manual edit:
@@ -257,7 +257,7 @@ Verify: `codex mcp list` / `codex mcp get thepexcel-excel`. Equivalent manual ed
 ```toml
 [mcp_servers.thepexcel-excel]
 command = "uv"
-args = ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "thepexcel-mcp"]
+args = ["run", "--directory", "C:\\path\\to\\ThepExcelMCP", "python", "-m", "thepexcel_mcp.server"]
 ```
 
 **Project-scoped:** add the same block to `.codex/config.toml` in the project root (there is no
@@ -277,7 +277,7 @@ checkout:
 
 ```bash
 claude mcp add thepexcel-excel --scope user -- \
-  uv.exe run --directory 'C:\Tools\ThepExcelMCP' thepexcel-mcp
+  uv.exe run --directory 'C:\Tools\ThepExcelMCP' python -m thepexcel_mcp.server
 ```
 
 The stdio pipes bridge the WSL→Windows boundary; the server and Excel both run natively on
@@ -349,6 +349,7 @@ Letting an AI agent drive your real Excel deserves guardrails. They are built in
 
 | Symptom | Cause / fix |
 |---|---|
+| Server won't start; Windows says an Application Control policy blocked `thepexcel-mcp.exe` | Smart App Control / WDAC blocks the unsigned launcher shim `uv` writes into `.venv\Scripts`. The commands in this README launch `python -m thepexcel_mcp.server` instead, which runs the same code without that shim — re-register with the current command if yours still ends in `thepexcel-mcp`. |
 | "Excel is not running" but you didn't start it | You don't have to — auto-launch is **on by default** (visible Excel + blank workbook). If you set `THEPEXCEL_MCP_AUTOLAUNCH=0`, open Excel yourself first. |
 | `AttributeError: ... CLSIDToClassMap` masquerading as "Excel not running" | Corrupt win32com `gen_py` early-binding cache. The server **self-heals** this: it clears the cache and retries once, automatically. |
 | Workbook open in a *second* Excel instance not found | Handled: the server scans the Windows Running Object Table (ROT) as a fallback when a workbook isn't in the first Excel instance. |
