@@ -1,10 +1,10 @@
-"""Range read/write operations with pagination, dynamic array and spill support."""
+"""Range read/write and whole-row/column deletion operations."""
 
 from __future__ import annotations
 
 from fastmcp.exceptions import ToolError
 
-from ..session import ExcelSession
+from ..session import ExcelSession, excel_guard
 
 _session = ExcelSession()
 
@@ -95,6 +95,12 @@ def range_action(
         python_code="import pandas as pd\\ndf = pd.DataFrame({'x': [1,2,3]})")``
     clear
         Clear cell contents (not formatting).
+    delete_rows, delete_columns
+        Delete entire worksheet rows/columns intersecting the range. Supports
+        disjoint areas ("2:4,9:9" or "B:D,G:G") and cell ranges. Overlapping
+        intervals are merged and deleted in descending order, preserving the
+        original indices. Excel shifts data and adjusts references. Does not
+        save the workbook. A failure may leave some intervals already deleted.
     """
     # Validate args (pure Python) before entering the COM worker
     if action == "write" and values is None:
@@ -109,9 +115,17 @@ def range_action(
         if not python_code:
             raise ToolError("action='write_py' requires 'python_code' (non-empty string).")
         return _session.run_com(_write_py, range, sheet, workbook, python_code)
-    if action not in ("read", "read_spill", "write", "write_formula", "write_py", "clear"):
+    if action in ("delete_rows", "delete_columns") and (
+        not isinstance(range, str) or not range.strip()
+    ):
+        raise ToolError(f"action='{action}' requires a non-empty range.")
+    if action not in (
+        "read", "read_spill", "write", "write_formula", "write_py", "clear",
+        "delete_rows", "delete_columns",
+    ):
         raise ToolError(
-            f"Unknown action '{action}'. Valid: read, read_spill, write, write_formula, write_py, clear."
+            f"Unknown action '{action}'. Valid: read, read_spill, write, "
+            "write_formula, write_py, clear, delete_rows, delete_columns."
         )
     return _session.run_com(
         _dispatch,
@@ -147,6 +161,8 @@ def _dispatch(
         return _write(range_str, sheet, workbook, values)
     if action == "write_formula":
         return _write_formula(range_str, sheet, workbook, formula)
+    if action in ("delete_rows", "delete_columns"):
+        return _delete_axis(action, range_str, sheet, workbook)
     return _clear(range_str, sheet, workbook)  # action == "clear"
 
 
@@ -165,6 +181,104 @@ def _resolve_range(range_str: str, sheet: str | None, workbook: str | None):
         return ws.Range(range_str)
     except Exception as e:
         raise _session.wrap(e, f"Invalid range '{range_str}'")
+
+
+def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Return sorted, disjoint intervals so each original index is deleted once."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _split_delete_areas(range_str: str) -> list[str]:
+    """Split comma unions without splitting quoted sheets or table references.
+
+    Resolve each area separately: Excel's COM Range parser can require the
+    local list separator for unions (e.g. semicolon on a French installation).
+    The public API consistently accepts commas on every Excel locale.
+    """
+    parts = []
+    start = depth = 0
+    quoted = False
+    for index, char in enumerate(range_str):
+        if char == "'" and depth == 0:
+            quoted = not quoted
+        elif not quoted:
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(range_str[start:index].strip())
+                start = index + 1
+    parts.append(range_str[start:].strip())
+    if not all(parts):
+        raise ToolError("Deletion range contains an empty area.")
+    return parts
+
+
+def _delete_axis(
+    action: str, range_str: str, sheet: str | None, workbook: str | None,
+) -> dict:
+    """Resolve all areas before deleting, then work from the highest index down."""
+    parts = _split_delete_areas(range_str)
+    rng = _resolve_range(parts[0], sheet, workbook)
+    axis = "rows" if action == "delete_rows" else "columns"
+    completed: list[dict] = []
+    try:
+        ws = rng.Parent
+        wb = ws.Parent
+        workbook_name, sheet_name = wb.Name, ws.Name
+        selections = [rng]
+        for part in parts[1:]:
+            if "!" in part:
+                raise ToolError("Use one sheet qualifier before the entire deletion selection.")
+            selections.append(ws.Range(part))
+        intervals = []
+        for selection in selections:
+            areas = selection.Areas
+            for index in range(1, areas.Count + 1):
+                area = areas.Item(index)
+                start = area.Row if axis == "rows" else area.Column
+                count = area.Rows.Count if axis == "rows" else area.Columns.Count
+                intervals.append((start, start + count - 1))
+        intervals = _merge_intervals(intervals)
+        if not intervals:
+            raise ToolError("The selection contains no rows or columns to delete.")
+
+        # Build each target from its ORIGINAL numeric indices immediately before
+        # Delete. Keeping COM Range handles across deletions would let Excel
+        # rewrite their addresses as earlier blocks move.
+        with excel_guard(wb.Application):
+            for start, end in reversed(intervals):
+                if axis == "rows":
+                    target = ws.Range(ws.Cells(start, 1), ws.Cells(end, 1)).EntireRow
+                else:
+                    target = ws.Range(ws.Cells(1, start), ws.Cells(1, end)).EntireColumn
+                block = {"start": start, "end": end, "range": target.Address}
+                target.Delete()
+                completed.append(block)
+        return {
+            "deleted": {
+                "workbook": workbook_name,
+                "sheet": sheet_name,
+                "axis": axis,
+                "intervals": list(reversed(completed)),
+                "count": sum(end - start + 1 for start, end in intervals),
+            }
+        }
+    except Exception as e:
+        deleted_count = sum(block["end"] - block["start"] + 1 for block in completed)
+        raise _session.wrap(
+            e,
+            f"Delete {axis} failed for '{range_str}'. "
+            f"Already deleted {deleted_count} {axis} at original intervals: {completed}. "
+            "The operation is not rolled back; inspect the workbook before retrying",
+        ) from e
 
 
 def _normalize_rows(raw) -> list:

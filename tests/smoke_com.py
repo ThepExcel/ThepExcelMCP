@@ -3684,6 +3684,110 @@ def check_excel_running() -> bool:
     return True
 
 
+# ── Section 29: Whole-row / whole-column deletion ──────────────────────────────
+
+def run_range_deletion() -> None:
+    section_header("SECTION 29 — Whole-row / whole-column deletion")
+    labels = ["range.delete_rows", "range.delete_columns", "range.delete_invalid",
+              "range.delete_protected", "range.delete_overlap"]
+    if _check_excel_busy(*labels):
+        return
+    wb = None
+    wb_name = None
+    try:
+        wb, wb_name = _new_wb()
+
+        def prepare():
+            ws = wb.Sheets(1)
+            ws.Name = "Delete Rows"
+            ws.Range("A1:B10").Value = tuple((i, i * 10) for i in range(1, 11))
+            ws.Range("C10").Formula2 = "=A10+B10"
+            columns = wb.Sheets.Add(After=ws)
+            columns.Name = "Delete Columns"
+            columns.Range("A1:J2").Value = (
+                tuple(range(1, 11)), tuple(i * 10 for i in range(1, 11)),
+            )
+            columns.Range("J3").Formula2 = "=J1+J2"
+            untouched = wb.Sheets.Add(After=columns)
+            untouched.Name = "Untouched"
+            untouched.Range("A1").Value = "Alpha"
+            untouched.Activate()
+        _session.run_com(prepare)
+
+        try:
+            result = range_action("delete_rows", range="'Delete Rows'!A2:B4,C9",
+                                  sheet="Untouched", workbook=wb_name)
+            rb = range_action("read", range="A1:C6", sheet="Delete Rows", workbook=wb_name)
+            expected = [1, 5, 6, 7, 8, 10]
+            assert [row[:2] for row in rb["values"]] == [[i, i * 10] for i in expected]
+            assert rb["values"][-1][2] == 110
+            formula = _session.run_com(lambda: wb.Sheets("Delete Rows").Range("C6").Formula2)
+            assert formula == "=A6+B6", formula
+            assert result["deleted"]["count"] == 4
+            record("range.delete_rows", "PASS")
+        except Exception as e:
+            record("range.delete_rows", "FAIL", str(e))
+
+        try:
+            result = range_action("delete_columns", range="B:D,G:G",
+                                  sheet="Delete Columns", workbook=wb_name)
+            rb = range_action("read", range="A1:F3", sheet="Delete Columns", workbook=wb_name)
+            assert rb["values"][0] == [1, 5, 6, 8, 9, 10]
+            assert rb["values"][1] == [10, 50, 60, 80, 90, 100]
+            assert rb["values"][2][-1] == 110
+            formula = _session.run_com(lambda: wb.Sheets("Delete Columns").Range("F3").Formula2)
+            assert formula == "=F1+F2", formula
+            assert result["deleted"]["count"] == 4
+            assert range_action("read", range="A1", sheet="Untouched",
+                                workbook=wb_name)["values"] == [["Alpha"]]
+            record("range.delete_columns", "PASS")
+        except Exception as e:
+            record("range.delete_columns", "FAIL", str(e))
+
+        try:
+            from fastmcp.exceptions import ToolError
+            try:
+                range_action("delete_rows", range="A0", sheet="Untouched", workbook=wb_name)
+                raise AssertionError("Invalid range unexpectedly succeeded")
+            except ToolError:
+                pass
+            assert range_action("read", range="A1", sheet="Untouched",
+                                workbook=wb_name)["values"] == [["Alpha"]]
+            record("range.delete_invalid", "PASS")
+        except Exception as e:
+            record("range.delete_invalid", "FAIL", str(e))
+
+        try:
+            _session.run_com(lambda: wb.Sheets("Untouched").Protect())
+            try:
+                range_action("delete_columns", range="A:A", sheet="Untouched", workbook=wb_name)
+                raise AssertionError("Protected deletion unexpectedly succeeded")
+            except ToolError as e:
+                assert "Already deleted 0 columns" in str(e)
+            finally:
+                _session.run_com(lambda: wb.Sheets("Untouched").Unprotect())
+            assert range_action("read", range="A1", sheet="Untouched",
+                                workbook=wb_name)["values"] == [["Alpha"]]
+            record("range.delete_protected", "PASS")
+        except Exception as e:
+            record("range.delete_protected", "FAIL", str(e))
+
+        try:
+            range_action("write", range="A1", sheet="Untouched", workbook=wb_name,
+                         values=[[i] for i in range(1, 11)])
+            result = range_action("delete_rows", range="2:4,3:6,9:9,9:9",
+                                  sheet="Untouched", workbook=wb_name)
+            rb = range_action("read", range="A1:A4", sheet="Untouched", workbook=wb_name)
+            assert rb["values"] == [[1], [7], [8], [10]]
+            assert result["deleted"]["count"] == 6
+            record("range.delete_overlap", "PASS")
+        except Exception as e:
+            record("range.delete_overlap", "FAIL", str(e))
+    finally:
+        if wb is not None:
+            _close_wb(wb, wb_name)
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 _ALL_SECTIONS = {
@@ -3715,6 +3819,7 @@ _ALL_SECTIONS = {
     "26": run_find_replace,
     "27": run_diff,
     "28": run_snapshot,
+    "29": run_range_deletion,
 }
 
 
