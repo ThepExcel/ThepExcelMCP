@@ -182,19 +182,21 @@ def excel_range(
     python_code: str | None = None,
     value_mode: str = "typed",
 ) -> dict:
-    """Read and write cell ranges.
+    """Read/write cell ranges and delete entire worksheet rows or columns.
 
     Parameters
     ----------
     action : str
         One of: ``read``, ``read_spill``, ``write``, ``write_formula``,
-        ``write_py``, ``clear``.
+        ``write_py``, ``clear``, ``delete_rows``, ``delete_columns``.
     range : str
         Range address. Examples:
         - ``"A1:C10"`` — standard A1 notation (active sheet)
         - ``"Sheet1!A1:C10"`` — sheet-qualified (overrides ``sheet`` param)
         - ``"SalesTable[Amount]"`` — structured table column reference
         - ``"A1"`` — single cell
+        - ``"2:4,9:9"`` — disjoint rows for ``delete_rows``
+        - ``"B:D,G:G"`` — disjoint columns for ``delete_columns``
     sheet : str, optional
         Sheet name. Uses active sheet when omitted.
         Ignored when ``range`` already contains a sheet qualifier (``Sheet1!...``).
@@ -256,6 +258,24 @@ def excel_range(
     clear
         Clears cell contents (preserves formatting).
         Example: ``excel_range(action="clear", range="A1:Z100")``
+    delete_rows
+        Deletes ALL worksheet rows intersecting the range, including cells
+        outside the selected columns. Supports cell ranges and disjoint areas.
+        Overlapping/adjacent intervals are merged and deleted bottom-up using
+        their original indices. Excel shifts data and adjusts formulas.
+        Example: ``excel_range(action="delete_rows", range="2:4,9:9",
+        sheet="Data", workbook="Test.xlsx")``
+    delete_columns
+        Deletes ALL worksheet columns intersecting the range, including cells
+        outside the selected rows. Disjoint intervals are deleted right-to-left.
+        Example: ``excel_range(action="delete_columns", range="B:D,G:G",
+        sheet="Data", workbook="Test.xlsx")``
+
+    Both deletion actions return ``{deleted: {workbook, sheet, axis, intervals,
+    count}}``. Each interval includes numeric ``start``/``end`` (1-based,
+    pre-deletion indices) and its original full-row/column ``range`` address.
+    The workbook remains open and is not saved. Errors report any intervals
+    already deleted; multi-block deletion is not atomic or automatically undone.
     """
     return range_action(
         action,

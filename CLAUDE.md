@@ -30,7 +30,7 @@ each tool's docstring (server.py); API landmines in `docs/com-gotchas.md`.
 |---|---|---|
 | `excel_workbook` | workbook.py | list, info, open, save, close, create, save_as |
 | `excel_sheet` | sheets.py | list, add, rename, delete |
-| `excel_range` | ranges.py | read (paginated, spill metadata), read_spill, write, write_formula (Formula2), write_py (experimental `=PY()`), clear |
+| `excel_range` | ranges.py | read (paginated, spill metadata), read_spill, write, write_formula (Formula2), write_py (experimental `=PY()`), clear, delete_rows, delete_columns |
 | `excel_powerquery` | powerquery.py + analysis/pq_analyzer.py | list, get, create, update, delete, refresh, refresh_all, load_to_table, load_to_datamodel, analyze, analyze_raw, create/get/set/list_parameters |
 | `excel_table` | tables.py | list, create, read, append_rows, add_column, sort, filter, set_style, toggle_totals, rename, delete |
 | `excel_pivot` | pivots.py | list, create (range/table/datamodel), add_field, remove_field, move_field, set_layout, refresh, delete, read |

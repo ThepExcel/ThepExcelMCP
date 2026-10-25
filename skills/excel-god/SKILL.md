@@ -233,7 +233,7 @@ Then in cells: `=TAX([@Amount], 7)`.
 |---|---|---|
 | `excel_workbook` | Core | list · info · open · save · close · create · save_as |
 | `excel_sheet` | Core | list · add · rename · delete |
-| `excel_range` | Core | read (paginated) · read_spill · write · write_formula · write_py · clear |
+| `excel_range` | Core | read (paginated) · read_spill · write · write_formula · write_py · clear · delete_rows · delete_columns |
 | `excel_powerquery` | Data/PQ/Model | list · get · create · update · delete · refresh · refresh_all · load_to_table · load_to_datamodel · analyze · analyze_raw · create_parameter · get_parameter · set_parameter · list_parameters |
 | `excel_table` | Data/PQ/Model | list · create · read · append_rows · add_column · sort · filter · set_style · toggle_totals · rename · delete |
 | `excel_pivot` | Data/PQ/Model | list · create · add_field · remove_field · move_field · set_layout · refresh · delete · read |

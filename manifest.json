@@ -44,7 +44,7 @@
     },
     {
       "name": "excel_range",
-      "description": "Read and write cell ranges, including dynamic-array spill and Python-in-Excel formulas."
+      "description": "Read/write cell ranges, dynamic-array spill and Python-in-Excel formulas; delete entire worksheet rows or columns, including disjoint blocks."
     },
     {
       "name": "excel_powerquery",
