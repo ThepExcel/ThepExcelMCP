@@ -1,7 +1,7 @@
 """Cross-version stdio handshake smoke: MCP SDK v2 client -> current server.
 
-Run outside the project environment so the v2 client does not conflict with
-FastMCP's current ``mcp<2`` dependency::
+Run outside the project environment so the client's ``mcp`` version is chosen
+independently of the one FastMCP locks::
 
     uv run --isolated --with mcp==2.0.0 python tests/protocol_smoke_v2.py
 

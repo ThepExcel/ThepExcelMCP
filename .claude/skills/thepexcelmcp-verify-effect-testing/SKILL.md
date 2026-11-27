@@ -182,7 +182,7 @@ uv run python tests/smoke_com.py --sections 1,2    # subset by _ALL_SECTIONS key
 | Register the server | `claude mcp add thepexcel-excel --scope user -- uv run --directory D:/ThepExcelMCP python -m thepexcel_mcp.server` (entry point `thepexcel_mcp.server:main`, `pyproject.toml [project.scripts]`) | `claude mcp list` |
 | Auto-launch (default ON) | `THEPEXCEL_MCP_AUTOLAUNCH` (default 1) → `get_app()` attaches to running Excel or launches a visible one + blank workbook + self-heals a corrupt `gen_py` cache (commit `53f9436`, 2026-07-06). Smoke relies on this owning its own Excel | `echo "$THEPEXCEL_MCP_AUTOLAUNCH"` (unset = default ON) |
 | Other env toggles (names only, not secrets) | `THEPEXCEL_MCP_ENABLE_VBA` (default off), `THEPEXCEL_MCP_COM_TIMEOUT` (120s), `THEPEXCEL_MCP_SLOW_LOG_S` (5.0s → stderr), `THEPEXCEL_MCP_EARLYBIND` (experimental, default off) | `README.md § Environment variables`; `session.py` |
-| `uv.lock` is gitignored | `.gitignore` — reproducible resolution rests on the pyproject pin `fastmcp>=3.4.2,<4` only; the migration doc's "uv.lock is already committed" is WRONG (queued doc fix, §8) | `git -C D:/ThepExcelMCP check-ignore uv.lock` |
+| `uv.lock` is committed | resolution is locked (`uv sync --frozen`); pyproject pins `fastmcp>=4.2.6,<5` | `git -C D:/ThepExcelMCP ls-files uv.lock` |
 | Windows COM env only | pywin32 STA worker; Excel Desktop must be installable/runnable. No Linux/cloud path — smoke cannot run in CI or a cloud session | `hostname` (this was authored on `SiraPC`; laptop state UNVERIFIED from here) |
 
 ## 8. Open decisions (claude-master `handoff/inbox.yaml` — ids only; do not re-raise)

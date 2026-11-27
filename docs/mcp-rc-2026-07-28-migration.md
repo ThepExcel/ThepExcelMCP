@@ -3,16 +3,16 @@
 > **Audited:** 2026-06-24 · **Re-verified:** 2026-08-04 with an MCP SDK 2.0.0 stdio client
 > **Verdict:** **LOW exposure · ZERO code migration required.** The one real risk is an *operational*, time-gated client/server version-skew window (late-July → Sept 2026), not an architectural one.
 
-## 2026-08-04 status
+## 2026-11-27 status — migrated
 
-- Dependency hardening is complete: `fastmcp>=3.4.5,<4`, a committed `uv.lock`, and
-  `uv sync --frozen` in CI/bundle builds.
-- `tests/protocol_smoke_v2.py` now launches the real stdio server from an isolated
-  `mcp==2.0.0` client. It verifies negotiation, all 26 tools in full mode, and the
-  optional BM25 discovery surface. The tested pair negotiated protocol `2025-11-25`.
-- FastMCP 3.4.5 currently resolves `mcp 1.28.0`; native sessionless-protocol adoption
-  remains a deliberate future dependency upgrade, but v2-client interoperability no
-  longer depends on a manual tool-list check.
+- `fastmcp>=4.2.6,<5`, locked at FastMCP 4.2.6 / `mcp 2.3.0` (the buy signal below fired:
+  FastMCP 4.2.x release notes name 2026-07-28 / sessionless clients).
+- `tests/protocol_smoke_v2.py` with `mcp==2.0.0` and `mcp==2.3.0` clients negotiates
+  protocol `2026-07-28`, 26 tools in full mode, 4 in BM25 mode.
+- Upgrading on a machine where MCP servers are running: `uv sync --frozen` cannot replace
+  `.venv/Scripts/thepexcel-mcp.exe` while any client holds it open (os error 32), and
+  until it succeeds every new `uv run` spawn of the server fails. Stop the running
+  `thepexcel-mcp.exe` trees first; clients respawn them on their next call.
 
 ---
 
@@ -74,7 +74,7 @@ The MCP lifecycle spec puts the disconnect decision on the **client**: *"If the 
 
 **The brick scenario:** if a Claude Desktop/Code build flips to the sessionless 2026-07-28 client protocol **before** an RC-ready `fastmcp` has been `uv sync`'d **and the stdio process restarted**, the server could silently vanish from Claude's tool list.
 
-- Current locked state (2026-08-04): `fastmcp 3.4.5` / `mcp 1.28.0`; the isolated SDK-v2 probe successfully negotiates `2025-11-25` and lists/calls tools.
+- Current locked state (2026-11-27): `fastmcp 4.2.6` / `mcp 2.3.0`; the isolated SDK-v2 probe negotiates `2026-07-28` and lists/calls tools.
 - Mitigating lags: client adoption lags spec publication by weeks–months; SEP-2596's 12-month deprecation window; the `server/discover` compat probe.
 - **Failure signature:** the `thepexcel-excel` tools disappear from Claude (tools not callable) — and it looks **nothing like** a COM/Excel error. Easy to misdiagnose as an Excel problem and burn an hour.
 
@@ -86,7 +86,7 @@ This keeps the verdict at **LOW, not NONE** (correcting the impact-map's over-ro
 
 1. **[DONE]** Pin FastMCP to a tested floor+ceiling and commit `uv.lock` for deterministic installs and bundles.
 2. **[DONE]** Put a real SDK-v2 stdio handshake in CI (`tests/protocol_smoke_v2.py`), including tool-list and BM25 search-tool calls.
-3. **Continue the release watch.** The buy signal is a FastMCP release whose notes name MCP 2026-07-28 / SEP-2575 / sessionless / `mcp>=2.0.0`; then make a deliberate lockfile upgrade and rerun the runbook below.
+3. **[DONE 2026-11-27]** Release watch: the buy signal fired (FastMCP 4.2.x), the lock was upgraded and the runbook below was run.
 4. **Keep the diagnostic:** if `thepexcel-excel` disappears from the client tool list without a COM error, suspect protocol skew first, then upgrade/restart the stdio process.
 
 ### Migration runbook (execute only when the buy signal fires)
