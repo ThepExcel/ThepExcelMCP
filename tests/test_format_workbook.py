@@ -537,3 +537,119 @@ class TestInferFileFormat:
         from thepexcel_mcp.domains.workbook import _infer_file_format
         with pytest.raises(ToolError, match="format"):
             _infer_file_format("report.ods")
+
+
+# ── Regression: create/save_as into a folder that does not exist yet ─────────
+
+def _run_workbook(action, mock_session, **kwargs):
+    from thepexcel_mcp.domains.workbook import workbook_action
+    with patch("thepexcel_mcp.domains.workbook._session", mock_session):
+        with patch("thepexcel_mcp.domains.workbook.excel_guard") as eg:
+            eg.return_value.__enter__ = MagicMock(return_value=None)
+            eg.return_value.__exit__ = MagicMock(return_value=False)
+            return workbook_action(action, **kwargs)
+
+
+class TestMissingFolder:
+    def test_create_makes_missing_folder(self, tmp_path):
+        """Excel's SaveAs cannot create folders; create must make them first."""
+        target = tmp_path / "new" / "nested" / "Made.xlsx"
+        mock_wb = MagicMock()
+        mock_wb.Name = "Made.xlsx"
+        mock_wb.FullName = str(target)
+        mock_app = MagicMock()
+        mock_app.Workbooks.Add.return_value = mock_wb
+        mock_session = make_mock_session()
+        mock_session.get_app.return_value = mock_app
+
+        _run_workbook("create", mock_session, path=target.as_posix())
+
+        assert (tmp_path / "new" / "nested").is_dir()
+        mock_wb.SaveAs.assert_called_once_with(str(target), FileFormat=51)
+
+    def test_save_as_makes_missing_folder(self, tmp_path):
+        target = tmp_path / "out" / "Copy.xlsx"
+        mock_wb = MagicMock()
+        mock_wb.Name = "Copy.xlsx"
+        mock_wb.FullName = str(target)
+        mock_session = make_mock_session()
+        mock_session.get_workbook.return_value = mock_wb
+
+        _run_workbook("save_as", mock_session, path=target.as_posix())
+
+        assert (tmp_path / "out").is_dir()
+        mock_wb.SaveAs.assert_called_once_with(str(target), FileFormat=51)
+
+    def test_create_closes_orphan_when_save_as_fails(self, tmp_path):
+        """A failed SaveAs must not leave an unsaved BookN open behind it."""
+        mock_wb = MagicMock()
+        mock_wb.Name = "Book2"
+        mock_wb.SaveAs.side_effect = Exception("cannot access the file")
+        mock_app = MagicMock()
+        mock_app.Workbooks.Add.return_value = mock_wb
+        mock_session = make_mock_session()
+        mock_session.get_app.return_value = mock_app
+        mock_session.wrap.side_effect = lambda e, msg: ToolError(f"{msg}: {e}")
+
+        with pytest.raises(ToolError, match="cannot access"):
+            _run_workbook("create", mock_session, path=(tmp_path / "x.xlsx").as_posix())
+
+        mock_wb.Close.assert_called_once_with(SaveChanges=False)
+
+
+# ── Regression: number_format sent as a JSON number by the client ─────────────
+
+def _call_tool_via_server(tool, arguments, target):
+    """Drive the real FastMCP validation path in-process; capture the domain kwargs."""
+    import asyncio
+    from fastmcp import Client
+    from thepexcel_mcp.server import mcp
+
+    seen = {}
+
+    def fake(action, *args, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True}
+
+    async def go():
+        with patch(f"thepexcel_mcp.server.{target}", fake):
+            async with Client(mcp) as c:
+                await c.call_tool(tool, arguments)
+
+    asyncio.run(go())
+    return seen
+
+
+class TestNumberFormatFromJsonNumber:
+    def test_format_tool_accepts_int_zero(self):
+        seen = _call_tool_via_server(
+            "excel_format",
+            {"action": "number_format", "range": "A1", "number_format": 0},
+            "format_action",
+        )
+        assert seen["number_format"] == "0"
+
+    def test_pivot_tool_accepts_int_zero(self):
+        seen = _call_tool_via_server(
+            "excel_pivot",
+            {"action": "add_field", "name": "P", "field": "Amount",
+             "area": "data", "number_format": 0},
+            "pivot_action",
+        )
+        assert seen["number_format"] == "0"
+
+    def test_float_is_rejected_not_rounded(self):
+        """0.0 may be a mangled "0.00"; guessing would silently drop decimals."""
+        with pytest.raises(Exception, match="number_format"):
+            _call_tool_via_server(
+                "excel_format",
+                {"action": "number_format", "range": "A1", "number_format": 0.0},
+                "format_action",
+            )
+
+    def test_domain_stringifies_int(self):
+        mock_session = make_mock_session()
+        rng = _make_range_mock()
+        result = _call_format("number_format", rng, mock_session, number_format=0)
+        assert rng.NumberFormat == "0"
+        assert result["applied"]["number_format"] == "0"

@@ -19,6 +19,7 @@ from __future__ import annotations
 import atexit
 import datetime
 import os
+import shutil
 import sys
 import textwrap
 import time
@@ -1274,7 +1275,7 @@ def run_format() -> None:
     section_header("SECTION 11 — excel_format (font / fill / border / number_format / alignment / autofit)")
     if _check_excel_busy(*[
         "format.font", "format.fill", "format.border",
-        "format.number_format", "format.alignment",
+        "format.number_format", "format.number_format_int", "format.alignment",
         "format.column_width", "format.row_height", "format.autofit",
     ]):
         return
@@ -1358,6 +1359,17 @@ def run_format() -> None:
         except Exception as e:
             record("format.number_format", "FAIL", str(e))
 
+        # --- number_format as a JSON number (clients that parse "0" to int) ---
+        try:
+            format_action("number_format", range="B2", sheet="Sheet1", workbook=wb_name,
+                          number_format=0)
+            nf = _session.run_com(
+                lambda: _session.get_sheet("Sheet1", wb_name).Range("B2").NumberFormat)
+            assert nf == "0", f"NumberFormat expected '0', got {nf!r}"
+            record("format.number_format_int", "PASS", f"NumberFormat={nf!r}")
+        except Exception as e:
+            record("format.number_format_int", "FAIL", str(e))
+
         # --- alignment: center header ---
         try:
             format_action("alignment", range="A1:C1", sheet="Sheet1", workbook=wb_name,
@@ -1421,7 +1433,7 @@ def run_format() -> None:
 def run_workbook_create_save_as() -> None:
     section_header("SECTION 12 — workbook.create + workbook.save_as")
     if _check_excel_busy("workbook.create", "workbook.create_with_path",
-                         "workbook.save_as"):
+                         "workbook.create_missing_folder", "workbook.save_as"):
         return
     import tempfile
 
@@ -1431,6 +1443,9 @@ def run_workbook_create_save_as() -> None:
     wb2_name = None
     tmp_path_create = None
     tmp_path_save_as = None
+    wb3 = None
+    wb3_name = None
+    missing_root = None
     try:
         # --- create: blank (no path) ---
         try:
@@ -1469,6 +1484,20 @@ def run_workbook_create_save_as() -> None:
         except Exception as e:
             record("workbook.create_with_path", "FAIL", str(e))
 
+        # --- create into a folder that does not exist yet (forward slashes) ---
+        try:
+            missing_root = os.path.join(tempfile.gettempdir(), "thepexcel_mcp_smoke_missing")
+            if os.path.exists(missing_root):
+                shutil.rmtree(missing_root)
+            target = os.path.join(missing_root, "nested", "made.xlsx").replace(os.sep, "/")
+            r = workbook_action("create", path=target)
+            wb3_name = r["created"]
+            wb3 = _session.run_com(lambda: _session.get_workbook(wb3_name))
+            assert os.path.exists(target), f"File not created on disk: {target}"
+            record("workbook.create_missing_folder", "PASS", f"file_exists=True name={wb3_name}")
+        except Exception as e:
+            record("workbook.create_missing_folder", "FAIL", str(e))
+
         # --- save_as: SaveAs existing workbook to new path ---
         try:
             # Use the first created blank wb (wb_name)
@@ -1500,6 +1529,10 @@ def run_workbook_create_save_as() -> None:
             _close_wb(wb, wb_name or "unknown")
         if wb2 is not None:
             _close_wb(wb2, wb2_name or "unknown")
+        if wb3 is not None:
+            _close_wb(wb3, wb3_name or "unknown")
+        if missing_root and os.path.exists(missing_root):
+            shutil.rmtree(missing_root, ignore_errors=True)
         # Clean up temp files
         for tmp in (tmp_path_create, tmp_path_save_as):
             if tmp and os.path.exists(tmp):
