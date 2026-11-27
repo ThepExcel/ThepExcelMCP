@@ -171,21 +171,44 @@ def _winpath(path: str) -> str:
     return os.path.normpath(path)
 
 
+def _save_target(path: str) -> str:
+    """Return the COM-ready path for a SaveAs, creating its folder if missing.
+
+    Excel's SaveAs cannot create folders: a missing one fails as
+    ``cannot access the file '<folder>\\D4011000'``."""
+    target = _winpath(path)
+    folder = os.path.dirname(target)
+    if folder:
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as e:
+            raise ToolError(f"Cannot create folder '{folder}': {e}") from e
+    return target
+
+
 def _create(path: str | None) -> dict:
     """Create a new blank workbook. If path is given, SaveAs immediately."""
+    fmt = _infer_file_format(path) if path else None
+    target = _save_target(path) if path else None
     app = _session.get_app()
+    wb = None
     try:
         with excel_guard(app):
             wb = app.Workbooks.Add()
             name = wb.Name
-            if path:
-                fmt = _infer_file_format(path)
-                wb.SaveAs(_winpath(path), FileFormat=fmt)
+            if target:
+                wb.SaveAs(target, FileFormat=fmt)
                 name = wb.Name
         return {"created": name, "path": wb.FullName if path else None}
-    except ToolError:
-        raise
     except Exception as e:
+        # A failed SaveAs would leave an unsaved BookN open behind the error.
+        if wb is not None and target:
+            try:
+                wb.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if isinstance(e, ToolError):
+            raise
         raise _session.wrap(e, "Create workbook failed")
 
 
@@ -193,9 +216,10 @@ def _save_as(workbook: str | None, path: str) -> dict:
     """SaveAs an existing workbook to a new path, inferring format from extension."""
     wb = _session.get_workbook(workbook)
     fmt = _infer_file_format(path)
+    target = _save_target(path)
     try:
         with excel_guard(wb.Application):
-            wb.SaveAs(_winpath(path), FileFormat=fmt)
+            wb.SaveAs(target, FileFormat=fmt)
         return {"saved_as": wb.Name, "path": wb.FullName}
     except ToolError:
         raise

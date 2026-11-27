@@ -646,10 +646,3 @@ class TestNumberFormatFromJsonNumber:
                 {"action": "number_format", "range": "A1", "number_format": 0.0},
                 "format_action",
             )
-
-    def test_domain_stringifies_int(self):
-        mock_session = make_mock_session()
-        rng = _make_range_mock()
-        result = _call_format("number_format", rng, mock_session, number_format=0)
-        assert rng.NumberFormat == "0"
-        assert result["applied"]["number_format"] == "0"

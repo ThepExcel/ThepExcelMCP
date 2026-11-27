@@ -11,6 +11,7 @@ import os
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError  # noqa: F401 — re-exported for domain modules
 from fastmcp.server.transforms.search import BM25SearchTransform
+from pydantic import StrictInt
 
 from .domains.charts import chart_action
 from .domains.comments import comment_action
@@ -38,6 +39,15 @@ from .domains.validation import validation_action
 from .domains.vba import vba_action
 from .domains.view import view_action
 from .domains.workbook import workbook_action
+
+
+def _format_code(number_format: str | int | None) -> str | None:
+    """Excel format codes are text, but some clients JSON-parse ``"0"`` into ``0``.
+
+    An int maps back to its digits exactly; a float is rejected by the
+    signature because ``0.0`` may have been ``"0.00"`` and the decimals are gone.
+    """
+    return None if number_format is None else str(number_format)
 
 
 def _tool_discovery_transforms(mode: str | None = None) -> list:
@@ -563,7 +573,7 @@ def excel_pivot(
     field: str | None = None,
     area: str | None = None,
     aggregation: str | None = None,
-    number_format: str | None = None,
+    number_format: str | StrictInt | None = None,
     layout: str | None = None,
     subtotals: bool | None = None,
     grand_totals: bool | None = None,
@@ -599,7 +609,8 @@ def excel_pivot(
         Aggregation for ``values`` area:
         sum/count/average/max/min (default sum).
     number_format : str, optional
-        Number format code for value fields (e.g. ``"#,##0.00"``).
+        Number format code for value fields (e.g. ``"#,##0.00"``). Pass it as a
+        string; a bare integer such as ``0`` is accepted as ``"0"``.
     layout : str, optional
         Layout for ``set_layout``: ``compact``, ``outline``, or ``tabular``.
     subtotals : bool, optional
@@ -665,7 +676,7 @@ def excel_pivot(
         field=field,
         area=area,
         aggregation=aggregation,
-        number_format=number_format,
+        number_format=_format_code(number_format),
         layout=layout,
         subtotals=subtotals,
         grand_totals=grand_totals,
@@ -1214,7 +1225,7 @@ def excel_format(
     border_weight: str = "thin",
     border_color: str | None = None,
     # number_format
-    number_format: str | None = None,
+    number_format: str | StrictInt | None = None,
     # alignment
     horizontal: str | None = None,
     vertical: str | None = None,
@@ -1275,7 +1286,8 @@ def excel_format(
     number_format : str, optional
         Excel NumberFormat code for ``number_format`` action.
         Examples: ``"#,##0.00"``, ``"0.0%"``, ``"yyyy-mm-dd"``,
-        ``"$#,##0.00"``.
+        ``"$#,##0.00"``. Pass it as a string; a bare integer such as ``0``
+        is accepted as ``"0"``.
     horizontal : str, optional
         Horizontal alignment for ``alignment`` action:
         ``general``, ``left``, ``center``, ``right``.
@@ -1354,7 +1366,7 @@ def excel_format(
         border_style=border_style,
         border_weight=border_weight,
         border_color=border_color,
-        number_format=number_format,
+        number_format=_format_code(number_format),
         horizontal=horizontal,
         vertical=vertical,
         wrap_text=wrap_text,
