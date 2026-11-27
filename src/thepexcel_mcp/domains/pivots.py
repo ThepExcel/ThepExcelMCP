@@ -15,6 +15,9 @@ _XL_EXTERNAL = 2    # external connection / data model
 
 # PivotTable version
 _XL_PIVOT_TABLE_VERSION_14 = 4  # Excel 2010+ (fully compatible with XLSX)
+# Data Model pivots need 15+: PivotCaches.Create(xlExternal, ThisWorkbookDataModel)
+# raises 0x800A03EC at version 14 (live probe 2026-11-27: 14 fails, 15/16/17 work).
+_XL_PIVOT_TABLE_VERSION_15 = 5
 
 # PivotField.Orientation
 _XL_HIDDEN = 0
@@ -396,7 +399,7 @@ def _create(
             pc = wb.PivotCaches().Create(
                 SourceType=_XL_EXTERNAL,
                 SourceData=conn,
-                Version=_XL_PIVOT_TABLE_VERSION_14,
+                Version=_XL_PIVOT_TABLE_VERSION_15,
             )
         else:
             # Range or table source

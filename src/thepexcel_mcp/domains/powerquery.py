@@ -536,7 +536,9 @@ def _load_to_datamodel(name: str, workbook: str | None) -> dict:
         "Data Source=$Workbook$;"
         f"Location={name}"
     )
-    command_text = f"SELECT * FROM [{name}]"
+    # xlCmdTable + bare name, not xlCmdSql: see datamodel._add_table — the SQL
+    # form makes current Excel name the model table "Query" instead of `name`.
+    command_text = name
 
     # Remove stale model connection for this query
     to_delete = []
@@ -559,7 +561,7 @@ def _load_to_datamodel(name: str, workbook: str | None) -> dict:
             "",
             conn_str,
             command_text,
-            2,      # lCmdtype = xlCmdSql
+            3,      # lCmdtype = xlCmdTable (names the model table)
             True,   # CreateModelConnection = True
             False,  # ImportRelationships
         )

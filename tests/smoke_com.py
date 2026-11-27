@@ -2447,9 +2447,15 @@ def run_cube() -> None:
 
         if model_ok:
             try:
+                # An explicit measure: implicit "Sum of X" measures exist only
+                # after a PivotTable sums the column, so CUBEVALUE on one is #N/A.
+                datamodel_action("add_measure", workbook=wb_name,
+                                 measure_name="Sum of Amount", table="CubeSales",
+                                 formula="=SUM(CubeSales[Amount])")
                 r = datamodel_action("cube_value", workbook=wb_name,
                                      target_cell="A1",
                                      measure="[Measures].[Sum of Amount]")
+                assert r.get("value") == 3700, f"expected 3700, got {r.get('value')!r}"
                 record("cube.live_cube_value", "PASS",
                        f"value={r.get('value')}")
             except Exception as e:

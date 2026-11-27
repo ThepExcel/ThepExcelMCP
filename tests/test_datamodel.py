@@ -685,3 +685,17 @@ class TestCubeResolveAsync:
             _cube_resolve_async(app)
 
         assert app.Calculate.call_count == 40
+
+
+# ── DAX formula body: Excel prepends its own '=' in CREATE MEASURE ────────────
+
+class TestDaxBody:
+    @pytest.mark.parametrize("given, expected", [
+        ("=SUM(T[A])", "SUM(T[A])"),
+        ("  = SUM(T[A])", "SUM(T[A])"),
+        ("SUM(T[A])", "SUM(T[A])"),
+        ("==SUM(T[A])", "=SUM(T[A])"),
+    ])
+    def test_strips_one_leading_equals(self, given, expected):
+        from thepexcel_mcp.domains.datamodel import _dax_body
+        assert _dax_body(given) == expected

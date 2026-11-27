@@ -683,7 +683,10 @@ def _add_table(
         "Data Source=$Workbook$;"
         f"Location={source_name}"
     )
-    command_text = f"SELECT * FROM [{source_name}]"
+    # xlCmdTable + the bare query name: with xlCmdSql + "SELECT * FROM [...]"
+    # current Excel names the model table "Query" / "Query 1" instead of the
+    # query (live probe 2026-11-27), so measures/relationships naming it fail.
+    command_text = source_name
 
     try:
         # For table source: auto-create a PQ query that wraps the ListObject.
@@ -729,7 +732,7 @@ def _add_table(
             "",               # Description
             conn_str,         # ConnectionString
             command_text,     # CommandText
-            2,                # lCmdtype = xlCmdSql
+            3,                # lCmdtype = xlCmdTable (names the model table)
             True,             # CreateModelConnection ← key difference
             False,            # ImportRelationships
         )
@@ -887,6 +890,13 @@ def _list_measures(workbook: str | None) -> dict:
     return {"measures": measures, "count": count}
 
 
+def _dax_body(formula: str) -> str:
+    """Drop one leading '=': Excel writes ``CREATE MEASURE 'T'[M]=<formula>`` itself,
+    so ``"=SUM(...)"`` became ``[M]==SUM(...)`` and failed (live, 2026-11-27)."""
+    body = formula.lstrip()
+    return body[1:].lstrip() if body.startswith("=") else body
+
+
 def _add_measure(
     measure_name: str,
     table_name: str,
@@ -918,7 +928,7 @@ def _add_measure(
         m = model.ModelMeasures.Add(
             MeasureName=measure_name,
             AssociatedTable=mt,
-            Formula=formula,
+            Formula=_dax_body(formula),
             FormatInformation=fmt_obj,
             Description=desc_arg,
         )
@@ -996,7 +1006,7 @@ def _update_measure(
         m_new = model.ModelMeasures.Add(
             MeasureName=measure_name,
             AssociatedTable=mt,
-            Formula=formula_to_use,
+            Formula=_dax_body(formula_to_use),
             FormatInformation=fmt_obj,
             Description=desc_arg,
         )
